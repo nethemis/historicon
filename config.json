@@ -5,8 +5,8 @@
   "transcripts_dir": "./transcripts_processed",
   "documents_collection": "podcast_transcripts",
   "retrieval_top_k": 20,
-  "semantic_chunk_threshold": 0.1,
-  "chunk_min_size": 5000,
+  "semantic_chunk_threshold": 0.3,
+  "chunk_min_size": 500,
   "chunk_max_size": 10000,
   "max_transcript_tokens": 10000,
   "max_context_tokens": 190000

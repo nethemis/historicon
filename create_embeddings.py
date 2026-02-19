@@ -225,8 +225,77 @@ class DocumentIndexer:
 
         return chunks
 
+    def combine_timestamped_chunks(
+        self, timestamped_sections: list[dict[str, str]]
+    ) -> list[dict[str, Any]]:
+        """Combine small timestamped sections into larger chunks meeting min_size.
+
+        Args:
+            timestamped_sections: List of dicts with timestamp, speaker, text
+
+        Returns:
+            List of combined chunks with metadata
+        """
+        if not timestamped_sections:
+            return []
+
+        combined_chunks = []
+        current_chunk = {
+            "text": "",
+            "start_timestamp": None,
+            "end_timestamp": None,
+            "speakers": [],
+        }
+
+        for section in timestamped_sections:
+            text = section["text"]
+            timestamp = section.get("timestamp", "")
+            speaker = section.get("speaker", "")
+
+            # Start new chunk if empty
+            if not current_chunk["text"]:
+                current_chunk["text"] = text
+                current_chunk["start_timestamp"] = timestamp
+                current_chunk["end_timestamp"] = timestamp
+                if speaker and speaker not in current_chunk["speakers"]:
+                    current_chunk["speakers"].append(speaker)
+            else:
+                # Add to current chunk
+                current_chunk["text"] += " " + text
+                current_chunk["end_timestamp"] = timestamp
+                if speaker and speaker not in current_chunk["speakers"]:
+                    current_chunk["speakers"].append(speaker)
+
+            # If we've reached min_size, save this chunk and start new one
+            if len(current_chunk["text"]) >= config.chunk_min_size:
+                # Don't exceed max_size
+                if len(current_chunk["text"]) <= config.chunk_max_size:
+                    combined_chunks.append(dict(current_chunk))
+                    current_chunk = {
+                        "text": "",
+                        "start_timestamp": None,
+                        "end_timestamp": None,
+                        "speakers": [],
+                    }
+                # If over max_size, split it
+                elif len(current_chunk["text"]) > config.chunk_max_size:
+                    # Save what we have and continue with overflow
+                    combined_chunks.append(dict(current_chunk))
+                    current_chunk = {
+                        "text": "",
+                        "start_timestamp": None,
+                        "end_timestamp": None,
+                        "speakers": [],
+                    }
+
+        # Add final chunk if not empty
+        if current_chunk["text"]:
+            combined_chunks.append(current_chunk)
+
+        return combined_chunks
+
     def create_semantic_chunks(self, text: str) -> list[str]:
-        """Split text into semantic chunks.
+        """Split text into semantic chunks respecting size constraints.
 
         Args:
             text: Text to chunk
@@ -234,18 +303,56 @@ class DocumentIndexer:
         Returns:
             List of text chunks
         """
-        if not text or len(text) < config.chunk_min_size:
-            return [text] if text else []
+        if not text:
+            return []
+
+        # If text is smaller than min_size, return as is
+        if len(text) < config.chunk_min_size:
+            return [text]
 
         try:
-            chunks = self.semantic_chunker.split_text(text)
-            # Filter by size constraints
-            valid_chunks = [
-                chunk.strip()
-                for chunk in chunks
-                if config.chunk_min_size <= len(chunk) <= config.chunk_max_size
-            ]
-            return valid_chunks if valid_chunks else [text]
+            # Apply semantic chunking to find topically coherent boundaries
+            raw_chunks = self.semantic_chunker.split_text(text)
+
+            # Combine small chunks and split large ones to meet size constraints
+            final_chunks = []
+            current_chunk = ""
+
+            for chunk in raw_chunks:
+                chunk = chunk.strip()
+                if not chunk:
+                    continue
+
+                # If current chunk would become too large, save it and start new one
+                if (
+                    current_chunk
+                    and len(current_chunk) + len(chunk) + 1 > config.chunk_max_size
+                ):
+                    if len(current_chunk) >= config.chunk_min_size:
+                        final_chunks.append(current_chunk)
+                        current_chunk = chunk
+                    else:
+                        # Current chunk is still too small, keep adding
+                        current_chunk += " " + chunk
+                # If no current chunk, start one
+                elif not current_chunk:
+                    current_chunk = chunk
+                # If combined would be under max_size, combine
+                else:
+                    current_chunk += " " + chunk
+
+                # If current chunk reached min_size and is at a semantic boundary, consider saving
+                if len(current_chunk) >= config.chunk_min_size:
+                    # Check if next iteration would exceed max_size
+                    # For now, continue accumulating until we hit max or run out of chunks
+                    pass
+
+            # Add final chunk if not empty
+            if current_chunk:
+                final_chunks.append(current_chunk)
+
+            return final_chunks if final_chunks else [text]
+
         except Exception as e:
             logfire.warn(f"Semantic chunking failed: {e}, using whole text")
             return [text]
@@ -371,19 +478,18 @@ class DocumentIndexer:
 
             # Create chunks from timestamped sections (preferred)
             if sections["timestamped_chunks"]:
-                print(f"   ⏳ Creating semantic chunks (this may take a while)...")
-                for i, chunk_data in enumerate(sections["timestamped_chunks"]):
-                    if i % 50 == 0 and i > 0:
-                        print(
-                            f"      Progress: {i}/{len(sections['timestamped_chunks'])} sections processed"
-                        )
-                    chunks = self.create_chunks_with_metadata(
-                        text=chunk_data["text"],
-                        filename=file_path.name,
-                        timestamp=chunk_data.get("timestamp"),
-                        speaker=chunk_data.get("speaker"),
-                    )
-                    all_chunks.extend(chunks)
+                print(f"   ⏳ Creating semantic chunks from transcript...")
+                # Concatenate all timestamped text for semantic chunking
+                full_text = " ".join(
+                    [s["text"] for s in sections["timestamped_chunks"]]
+                )
+
+                # Apply semantic chunking to find topically coherent chunks
+                chunks = self.create_chunks_with_metadata(
+                    text=full_text,
+                    filename=file_path.name,
+                )
+                all_chunks.extend(chunks)
             # Fallback to full text if no timestamped sections
             elif sections["full_text"]:
                 chunks = self.create_chunks_with_metadata(
