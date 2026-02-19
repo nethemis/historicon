@@ -1,0 +1,50 @@
+[project]
+name = "historicon"
+version = "0.1.0"
+description = "Greek podcast RAG agent with multi-agent orchestration"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic>=2.0.0",
+    "pydantic-ai>=0.0.1",
+    "logfire>=0.1.0",
+    "uvicorn>=0.27.0",
+    "anthropic>=0.18.0",
+    "feedparser>=6.0.10",
+    "requests>=2.31.0",
+    "deepgram-sdk>=3.0.0",
+    "pydub>=0.25.1",
+    "chromadb>=0.4.0",
+    "sentence-transformers>=2.2.0",
+    "langchain>=0.1.0",
+    "langchain-huggingface>=0.0.1",
+    "langchain-experimental>=0.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agents"]
+
+[tool.coverage.run]
+source = ["agents"]
+omit = ["*/tests/*", "*/test_*.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
