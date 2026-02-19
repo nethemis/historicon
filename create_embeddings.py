@@ -184,12 +184,13 @@ class DocumentIndexer:
         while i < len(lines):
             line = lines[i].strip()
 
-            # Look for timestamp pattern: [HH:MM:SS.mmm - HH:MM:SS.mmm] Speaker N:
+            # Look for timestamp pattern: [HH:MM:SS.mmm - HH:MM:SS.mmm] Speaker:
             # Handles both formats:
             # 1. Text on same line: [timestamp] Speaker: text...
             # 2. Text on next lines: [timestamp] Speaker:\n text...
+            # Speaker can be any name (Greek names or "Speaker N" format)
             timestamp_match = re.match(
-                r"\[(\d{2}:\d{2}:\d{2}\.\d+) - \d{2}:\d{2}:\d{2}\.\d+\]\s+(Speaker \d+):\s*(.*)",
+                r"\[(\d{2}:\d{2}:\d{2}\.\d+) - \d{2}:\d{2}:\d{2}\.\d+\]\s+([^:]+):\s*(.*)",
                 line,
             )
 
