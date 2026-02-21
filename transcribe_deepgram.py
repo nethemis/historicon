@@ -1,4 +1,5 @@
 import os
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -13,6 +14,42 @@ def format_timestamp(seconds):
     return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
 
 
+def convert_to_mp3(input_file, output_file):
+    """Convert audio file to MP3 using ffmpeg.
+
+    Args:
+        input_file: Path to input audio file
+        output_file: Path for output MP3 file
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-i",
+                str(input_file),
+                "-vn",  # No video
+                "-ar",
+                "48000",  # 48kHz sample rate
+                "-ac",
+                "2",  # Stereo
+                "-b:a",
+                "128k",  # 128kbps bitrate (good quality, small size)
+                "-y",  # Overwrite output file
+                str(output_file),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"   ❌ ffmpeg conversion failed: {e.stderr}")
+        return False
+
+
 def transcribe_audio(audio_file_path, output_dir="transcripts"):
     """
     Transcribe Greek audio using Deepgram's Nova-3 model.
@@ -24,9 +61,37 @@ def transcribe_audio(audio_file_path, output_dir="transcripts"):
     Returns:
         tuple: (status, filename, message, transcript_length)
     """
+    # Store original file path for error reporting
+    original_file_path = audio_file_path
+
     try:
         # Initialize Deepgram client (automatically reads DEEPGRAM_API_KEY from environment)
         client = DeepgramClient()
+
+        # Store original file path for output filename
+        original_file_path = audio_file_path
+
+        # Check file size and convert large WAV files to MP3
+        file_path = Path(audio_file_path)
+        file_size_mb = file_path.stat().st_size / (1024 * 1024)
+
+        # If WAV file is larger than 200MB, convert to MP3 first
+        if file_path.suffix.lower() == ".wav" and file_size_mb > 200:
+            print(f"   🔄 Large WAV file ({file_size_mb:.1f}MB), converting to MP3...")
+            mp3_path = file_path.with_suffix(".mp3")
+
+            if convert_to_mp3(file_path, mp3_path):
+                print(
+                    f"   ✅ Converted to MP3: {mp3_path.name} ({mp3_path.stat().st_size / (1024 * 1024):.1f}MB)"
+                )
+                audio_file_path = mp3_path  # Use MP3 for transcription
+            else:
+                return (
+                    "error",
+                    os.path.basename(original_file_path),
+                    "Failed to convert large WAV to MP3",
+                    0,
+                )
 
         # Read and transcribe the audio file
         with open(audio_file_path, "rb") as audio_file:
@@ -44,8 +109,8 @@ def transcribe_audio(audio_file_path, output_dir="transcripts"):
         # Extract the transcript
         transcript = response.results.channels[0].alternatives[0].transcript
 
-        # Get output filename
-        base_name = os.path.splitext(os.path.basename(audio_file_path))[0]
+        # Get output filename (use original filename, not converted MP3 name)
+        base_name = os.path.splitext(os.path.basename(original_file_path))[0]
         output_file = os.path.join(output_dir, f"{base_name}.txt")
 
         # Save the transcript with timestamps and speaker separation
@@ -119,9 +184,9 @@ def transcribe_audio(audio_file_path, output_dir="transcripts"):
         return ("success", base_name, None, len(transcript))
 
     except FileNotFoundError:
-        return ("error", os.path.basename(audio_file_path), "File not found", 0)
+        return ("error", os.path.basename(original_file_path), "File not found", 0)
     except Exception as e:
-        return ("error", os.path.basename(audio_file_path), str(e), 0)
+        return ("error", os.path.basename(original_file_path), str(e), 0)
 
 
 def batch_transcribe(input_dir="inputs", output_dir="transcripts", max_workers=5):
