@@ -96,34 +96,7 @@ class DocumentIndexer:
         print(f"✅ ChromaDB collection: {config.documents_collection}")
         logfire.info(f"ChromaDB collection ready: {config.documents_collection}")
 
-        # Track indexed files
-        print("\n⏳ Loading index metadata...")
-        self._indexed_files: set[str] = self._load_indexed_files()
-        print(f"✅ Found {len(self._indexed_files)} previously indexed files")
-
-    def _load_indexed_files(self) -> set[str]:
-        """Load the set of already indexed files."""
-        try:
-            result = self.collection.get(ids=["__index_metadata__"])
-            if result and result["metadatas"]:
-                files_str = result["metadatas"][0].get("indexed_files", "")
-                if files_str:
-                    return set(files_str.split("|"))
-        except Exception:
-            logfire.debug("No existing index metadata")
-        return set()
-
-    def _save_indexed_files(self) -> None:
-        """Save the set of indexed files."""
-        try:
-            files_str = "|".join(self._indexed_files)
-            self.collection.upsert(
-                ids=["__index_metadata__"],
-                metadatas=[{"indexed_files": files_str}],
-                documents=["Index metadata"],
-            )
-        except Exception as e:
-            logfire.error(f"Failed to save index metadata: {e}")
+        print("✅ DocumentIndexer ready")
 
     def parse_transcript(self, content: str) -> dict[str, Any]:
         """Parse transcript into full text and timestamped sections.
@@ -250,7 +223,7 @@ class DocumentIndexer:
         segment_texts = [seg["text"] for seg in timestamped_sections]
         segment_embeddings = self.embedding_model.encode(
             segment_texts,
-            batch_size=32,
+            batch_size=config.embedding_batch_size,
             show_progress_bar=False,
             convert_to_tensor=False,
         )
@@ -454,12 +427,16 @@ class DocumentIndexer:
 
             ids.append(chunk_id)
             documents.append(chunk["text"])
+            # Metadata already includes indexed_timestamp from index_file
             metadatas.append(chunk["metadata"])
 
         # Create embeddings in batch (much faster!)
         print(f"   ⏳ Creating {len(documents)} embeddings in batch...")
         embeddings_array = self.embedding_model.encode(
-            documents, batch_size=32, show_progress_bar=False, convert_to_tensor=False
+            documents,
+            batch_size=config.embedding_batch_size,
+            show_progress_bar=False,
+            convert_to_tensor=False,
         )
 
         # Convert to list of lists
@@ -493,6 +470,9 @@ class DocumentIndexer:
             print(f"\n📄 Indexing: {file_path.name}")
             logfire.info(f"Indexing {file_path.name}")
 
+            # Get file modification timestamp
+            file_mtime = file_path.stat().st_mtime
+
             # Read transcript
             print("   ⏳ Reading file...")
             content = file_path.read_text(encoding="utf-8")
@@ -512,7 +492,7 @@ class DocumentIndexer:
             if sections["timestamped_chunks"]:
                 chunks = self.create_semantic_chunks_from_speakers(
                     timestamped_sections=sections["timestamped_chunks"],
-                    filename=file_path.name,
+                    filename=file_path.stem,  # Use stem (without .txt) for consistency
                 )
                 all_chunks.extend(chunks)
             # Fallback to simple chunking if no timestamped sections
@@ -520,9 +500,26 @@ class DocumentIndexer:
                 print("   ⚠️  No speaker info found, using simple chunking...")
                 chunks = self.create_simple_chunks(
                     text=sections["full_text"],
-                    filename=file_path.name,
+                    filename=file_path.stem,  # Use stem (without .txt) for consistency
                 )
                 all_chunks.extend(chunks)
+
+            # Add indexed timestamp to all chunks
+            for chunk in all_chunks:
+                chunk["metadata"]["indexed_timestamp"] = file_mtime
+
+            # Delete old chunks if re-indexing
+            episode_name = file_path.stem
+            try:
+                # Get all existing chunks for this episode
+                existing = self.collection.get(
+                    where={"episode": episode_name},
+                )
+                if existing and existing["ids"]:
+                    print(f"   🗑️  Deleting {len(existing['ids'])} old chunks...")
+                    self.collection.delete(ids=existing["ids"])
+            except Exception as e:
+                logfire.debug(f"No existing chunks to delete for {episode_name}: {e}")
 
             # Store chunks
             if all_chunks:
@@ -541,10 +538,29 @@ class DocumentIndexer:
             logfire.error(f"❌ Failed to index {file_path.name}: {e}")
             return {"success": False, "chunks_created": 0, "error": str(e)}
 
-    def mark_as_indexed(self, file_path: Path) -> None:
-        """Mark file as indexed."""
-        self._indexed_files.add(file_path.name)
-        self._save_indexed_files()
+    def get_existing_file_timestamp(self, episode_name: str) -> float | None:
+        """Get the timestamp of when a file was last indexed.
+
+        Args:
+            episode_name: Episode name (filename without .txt)
+
+        Returns:
+            Unix timestamp of last indexing, or None if not indexed
+        """
+        try:
+            # Query for any document with this episode name prefix
+            # IDs follow pattern: {episode_name}_0, {episode_name}_1, etc.
+            result = self.collection.get(
+                where={"episode": episode_name},
+                limit=1,
+            )
+
+            if result and result["metadatas"]:
+                return result["metadatas"][0].get("indexed_timestamp")
+        except Exception as e:
+            logfire.debug(f"Error checking timestamp for {episode_name}: {e}")
+
+        return None
 
     def should_skip_file(self, file_path: Path, force: bool = False) -> bool:
         """Check if file should be skipped.
@@ -558,19 +574,44 @@ class DocumentIndexer:
         """
         if force:
             return False
-        return file_path.name in self._indexed_files
+
+        episode_name = file_path.stem
+
+        # Check if file has been indexed and get its timestamp
+        indexed_timestamp = self.get_existing_file_timestamp(episode_name)
+
+        if indexed_timestamp is None:
+            # Never been indexed
+            return False
+
+        # Compare file modification time with indexed timestamp
+        file_mtime = file_path.stat().st_mtime
+
+        if file_mtime > indexed_timestamp:
+            logfire.info(
+                f"File {episode_name} modified since last index, will re-index"
+            )
+            return False
+
+        # File exists in DB and hasn't been modified
+        return True
 
 
-def index_all_transcripts(force: bool = False, workers: int = 3) -> dict[str, Any]:
+def index_all_transcripts(
+    force: bool = False, workers: int | None = None
+) -> dict[str, Any]:
     """Index all transcript files in the configured transcripts directory.
 
     Args:
         force: If True, reindex all files even if already indexed
-        workers: Number of parallel workers
+        workers: Number of parallel workers (default: from config)
 
     Returns:
         Dictionary with indexing statistics
     """
+    if workers is None:
+        workers = config.indexing_workers
+
     transcripts_dir = Path(config.transcripts_dir)
 
     if not transcripts_dir.exists():
@@ -608,7 +649,7 @@ def index_all_transcripts(force: bool = False, workers: int = 3) -> dict[str, An
         logfire.info("All files already indexed. Use --force to reindex.")
         return {
             "total_files": len(transcript_files),
-            "successful": len(transcript_files),
+            "successful": 0,  # No files were indexed
             "failed": 0,
             "skipped": len(transcript_files),
         }
@@ -641,7 +682,6 @@ def index_all_transcripts(force: bool = False, workers: int = 3) -> dict[str, An
                 result = future.result()
                 if result["success"]:
                     successful += 1
-                    indexer.mark_as_indexed(file_path)
                     print(f"\n[{completed}/{total}] ✅ Success: {file_path.name}")
                 else:
                     failed += 1

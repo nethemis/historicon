@@ -34,6 +34,12 @@ class Config(BaseModel):
     transcripts_dir: str = Field(
         description="Directory containing processed transcript files"
     )
+    raw_transcripts_dir: str = Field(
+        description="Directory containing raw transcript files from Deepgram"
+    )
+    audio_input_dir: str = Field(
+        description="Directory containing audio files for transcription"
+    )
     documents_collection: str = Field(description="Name of ChromaDB collection")
     retrieval_top_k: int = Field(
         default=20, description="Number of candidates to retrieve before reranking"
@@ -58,6 +64,21 @@ class Config(BaseModel):
     max_context_tokens: int = Field(
         default=190000,
         description="Maximum total context tokens before issuing warnings (safety margin for 200k limit)",
+    )
+    embedding_batch_size: int = Field(
+        default=32, description="Batch size for creating embeddings"
+    )
+    indexing_workers: int = Field(
+        default=3, description="Number of parallel workers for indexing transcripts"
+    )
+    transcription_workers: int = Field(
+        default=5, description="Number of parallel workers for Deepgram transcription"
+    )
+    deepgram_model: str = Field(
+        default="nova-3", description="Deepgram model for transcription"
+    )
+    deepgram_language: str = Field(
+        default="el", description="Language code for transcription (el=Greek)"
     )
 
     def ensure_directories(self) -> None:

@@ -3,11 +3,18 @@
   "reranking_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
   "chroma_db_dir": "./chroma_db",
   "transcripts_dir": "./transcripts_processed",
+  "raw_transcripts_dir": "./transcripts",
+  "audio_input_dir": "./inputs",
   "documents_collection": "podcast_transcripts",
   "retrieval_top_k": 20,
   "similarity_threshold": 0.75,
   "chunk_min_size": 200,
   "chunk_max_size": 2000,
   "max_transcript_tokens": 10000,
-  "max_context_tokens": 190000
+  "max_context_tokens": 190000,
+  "embedding_batch_size": 32,
+  "indexing_workers": 3,
+  "transcription_workers": 5,
+  "deepgram_model": "nova-3",
+  "deepgram_language": "el"
 }

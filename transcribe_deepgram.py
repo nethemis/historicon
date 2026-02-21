@@ -5,6 +5,8 @@ from pathlib import Path
 
 from deepgram import DeepgramClient
 
+from config import config
+
 
 def format_timestamp(seconds):
     """Convert seconds to HH:MM:SS.mmm format"""
@@ -50,17 +52,20 @@ def convert_to_mp3(input_file, output_file):
         return False
 
 
-def transcribe_audio(audio_file_path, output_dir="transcripts"):
+def transcribe_audio(audio_file_path, output_dir=None):
     """
     Transcribe Greek audio using Deepgram's Nova-3 model.
 
     Args:
         audio_file_path: Path to the audio file to transcribe
-        output_dir: Directory to save the transcript
+        output_dir: Directory to save the transcript (default: from config)
 
     Returns:
         tuple: (status, filename, message, transcript_length)
     """
+    if output_dir is None:
+        output_dir = config.raw_transcripts_dir
+
     # Store original file path for error reporting
     original_file_path = audio_file_path
 
@@ -97,8 +102,8 @@ def transcribe_audio(audio_file_path, output_dir="transcripts"):
         with open(audio_file_path, "rb") as audio_file:
             response = client.listen.v1.media.transcribe_file(
                 request=audio_file.read(),
-                model="nova-3",
-                language="el",  # Greek
+                model=config.deepgram_model,
+                language=config.deepgram_language,
                 smart_format=True,
                 punctuate=True,
                 paragraphs=True,
@@ -189,15 +194,22 @@ def transcribe_audio(audio_file_path, output_dir="transcripts"):
         return ("error", os.path.basename(original_file_path), str(e), 0)
 
 
-def batch_transcribe(input_dir="inputs", output_dir="transcripts", max_workers=5):
+def batch_transcribe(input_dir=None, output_dir=None, max_workers=None):
     """
     Transcribe all audio files in input directory using parallel processing.
 
     Args:
-        input_dir: Directory containing audio files
-        output_dir: Directory to save transcripts
-        max_workers: Number of concurrent transcriptions
+        input_dir: Directory containing audio files (default: from config)
+        output_dir: Directory to save transcripts (default: from config)
+        max_workers: Number of concurrent transcriptions (default: from config)
     """
+    if input_dir is None:
+        input_dir = config.audio_input_dir
+    if output_dir is None:
+        output_dir = config.raw_transcripts_dir
+    if max_workers is None:
+        max_workers = config.transcription_workers
+
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
 
