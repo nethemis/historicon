@@ -38,17 +38,18 @@ class Config(BaseModel):
     retrieval_top_k: int = Field(
         default=20, description="Number of candidates to retrieve before reranking"
     )
-    semantic_chunk_threshold: float = Field(
-        default=0.75,
-        description="Threshold for semantic chunking (0-1)",
+    similarity_threshold: float = Field(
+        default=0.85,
+        description="Cosine similarity threshold for grouping speaker segments (0-1). Higher = looser grouping, larger chunks.",
         ge=0.0,
         le=1.0,
     )
     chunk_min_size: int = Field(
-        default=100, description="Minimum chunk size in characters"
+        default=1000, description="Minimum chunk size in characters"
     )
     chunk_max_size: int = Field(
-        default=1000, description="Maximum chunk size in characters"
+        default=10000,
+        description="Maximum chunk size in characters (soft limit, speakers never split)",
     )
     max_transcript_tokens: int = Field(
         default=10000,

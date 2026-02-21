@@ -166,6 +166,8 @@ async def test_get_full_transcript_tool_exists():
         get_full_transcript,
         get_transcript_section,
         search_documents,
+        list_podcast_info_sections,
+        get_podcast_info_section,
         web_orchestrator,
     )
 
@@ -173,6 +175,49 @@ async def test_get_full_transcript_tool_exists():
     assert callable(get_full_transcript)
     assert callable(get_transcript_section)
     assert callable(search_documents)
+    assert callable(list_podcast_info_sections)
+    assert callable(get_podcast_info_section)
 
     # Verify agent instance exists
     assert web_orchestrator is not None
+
+
+@pytest.mark.asyncio
+async def test_list_podcast_info_sections():
+    """Test that podcast info sections can be listed."""
+    from agents.web_orchestrator import list_podcast_info_sections
+    
+    mock_ctx = MagicMock()
+    sections = await list_podcast_info_sections(mock_ctx)
+    
+    assert isinstance(sections, list)
+    assert len(sections) > 0
+    # Should have section keys with titles
+    assert any("ΒΑΣΙΚΑ_ΣΤΟΙΧΕΙΑ" in s for s in sections)
+
+
+@pytest.mark.asyncio
+async def test_get_podcast_info_section():
+    """Test that podcast info section can be retrieved."""
+    from agents.web_orchestrator import get_podcast_info_section
+    
+    mock_ctx = MagicMock()
+    info = await get_podcast_info_section(mock_ctx, "ΒΑΣΙΚΑ_ΣΤΟΙΧΕΙΑ")
+    
+    assert isinstance(info, str)
+    assert len(info) > 0
+    # Should contain podcast information
+    assert "Ιστορικών" in info or "HistoriCon" in info or "Error" in info
+
+
+@pytest.mark.asyncio
+async def test_get_podcast_info_section_not_found():
+    """Test handling of non-existent section."""
+    from agents.web_orchestrator import get_podcast_info_section
+    
+    mock_ctx = MagicMock()
+    info = await get_podcast_info_section(mock_ctx, "NONEXISTENT_SECTION")
+    
+    assert isinstance(info, str)
+    # Should indicate error or not found
+    assert "Error" in info or "not found" in info

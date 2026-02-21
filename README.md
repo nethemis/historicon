@@ -85,8 +85,8 @@ The system is configured via `config.json` in the project root. All settings are
   "transcripts_dir": "./transcripts_processed",
   "documents_collection": "podcast_transcripts",
   "retrieval_top_k": 20,
-  "semantic_chunk_threshold": 0.1,
-  "chunk_min_size": 5000,
+  "similarity_threshold": 0.85,
+  "chunk_min_size": 1000,
   "chunk_max_size": 10000,
   "max_transcript_tokens": 10000,
   "max_context_tokens": 190000
@@ -128,19 +128,24 @@ The system is configured via `config.json` in the project root. All settings are
 
 #### Chunking Settings
 
-- **`semantic_chunk_threshold`** (float, 0.0-1.0, default: `0.1`)
-  - Controls semantic similarity threshold for chunking
-  - **Lower values (0.1-0.4)**: More permissive, larger chunks
-  - **Higher values (0.6-0.9)**: Stricter boundaries, smaller chunks
-  - Current: 0.1 for Greek podcast conversations
+The system uses **speaker-aware semantic chunking** that:
+- Never splits a single speaker's continuous speech
+- Groups consecutive speaker segments if semantically similar
+- Compares each segment to the chunk's average embedding
 
-- **`chunk_min_size`** (integer, default: `5000`)
+- **`similarity_threshold`** (float, 0.0-1.0, default: `0.85`)
+  - Cosine similarity threshold for grouping speaker segments
+  - **Lower values (0.5-0.7)**: Strict grouping, only very similar topics → smaller chunks
+  - **Higher values (0.8-0.95)**: Loose grouping, related topics together → larger chunks
+  - Current: 0.85 for natural conversational flow
+
+- **`chunk_min_size`** (integer, default: `1000`)
   - Minimum chunk size in characters
-  - Prevents chunks that are too small to be meaningful
+  - Enforced first before applying similarity threshold
 
 - **`chunk_max_size`** (integer, default: `10000`)
-  - Maximum chunk size in characters
-  - Prevents chunks from exceeding context limits
+  - Maximum chunk size in characters (soft limit)
+  - Speakers are **never split** even if they exceed this size
 
 #### Context Management Settings
 
@@ -160,11 +165,18 @@ The system is configured via `config.json` in the project root. All settings are
 Edit `config.json` and restart the agent:
 
 ```bash
-# Example: Reduce chunk size for finer granularity
+# Example: Stricter grouping for more granular chunks
 {
-  "semantic_chunk_threshold": 0.5,  # Stricter boundaries
-  "chunk_min_size": 2000,            # Smaller chunks
+  "similarity_threshold": 0.70,  # Only group very similar topics
+  "chunk_min_size": 500,          # Allow smaller chunks
   "chunk_max_size": 5000
+}
+
+# Example: Looser grouping for larger conversational chunks
+{
+  "similarity_threshold": 0.90,  # Group loosely related topics
+  "chunk_min_size": 2000,
+  "chunk_max_size": 15000
 }
 
 # Example: Increase context safety margin

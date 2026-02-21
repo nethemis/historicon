@@ -127,8 +127,8 @@ TIMESTAMPED TRANSCRIPT WITH SPEAKERS
   "chroma_db_path": "chroma_db",
   "collection_name": "historicon_transcripts",
   "embedding_model": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
-  "semantic_chunk_threshold": 0.1,
-  "chunk_min_size": 5000,
+  "similarity_threshold": 0.85,
+  "chunk_min_size": 1000,
   "chunk_max_size": 10000,
   "max_transcript_tokens": 10000,
   "max_context_tokens": 190000
@@ -136,8 +136,8 @@ TIMESTAMPED TRANSCRIPT WITH SPEAKERS
 ```
 
 **Key Settings:**
-- `semantic_chunk_threshold`: Lower = stricter semantic boundaries (default: 0.1)
-- `chunk_min_size`/`chunk_max_size`: Character limits for embedding chunks
+- `similarity_threshold`: Cosine similarity for grouping speaker segments (0.85 = loose grouping, larger chunks; 0.5 = strict, smaller chunks)
+- `chunk_min_size`/`chunk_max_size`: Character limits for chunks (speakers never split even if exceeding max)
 - `max_transcript_tokens`: Page size for paginated transcript access (10k tokens)
 - `max_context_tokens`: Safety limit for conversation context (190k = buffer for Claude 200k limit)
 - `transcripts_dir`: Source directory for embeddings (use `transcripts_processed`, not raw `transcripts`)

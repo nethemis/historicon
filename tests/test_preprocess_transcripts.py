@@ -186,12 +186,12 @@ TIMESTAMPED TRANSCRIPT WITH SPEAKERS
     lines = [l for l in result.split("\n") if l.strip()]
     assert len(lines) == 2  # Should have 2 combined entries
 
-    # Check first entry (Speaker 0 combined)
-    assert "[00:01:25.780 - 00:01:27.780] Speaker 0:" in lines[0]
+    # Check first entry (Speaker 0 renamed to Κωνσταντίνος Ψυλλίδης)
+    assert "[00:01:25.780 - 00:01:27.780] Κωνσταντίνος Ψυλλίδης:" in lines[0]
     assert "διακοπήι" in lines[0]
     assert "επειδή" in lines[0]
 
-    # Check second entry (Speaker 1 combined)
-    assert "[00:01:28.740 - 00:01:35.300] Speaker 1:" in lines[1]
+    # Check second entry (Speaker 1 renamed to Παύλος Παυλίδης)
+    assert "[00:01:28.740 - 00:01:35.300] Παύλος Παυλίδης:" in lines[1]
     assert "μπορεί" in lines[1]
     assert "Παυλίδη" in lines[1]

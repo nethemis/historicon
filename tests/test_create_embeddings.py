@@ -101,15 +101,15 @@ TIMESTAMPED TRANSCRIPT WITH SPEAKERS
         indexer = DocumentIndexer()
         filename = "George_Santos_Ο_πολιτικός_που_χρειάζεται_η_Κύπρος_μας.txt"
 
-        chunks = indexer.create_chunks_with_metadata(
+        # Use simple chunks for testing (no speaker info required)
+        chunks = indexer.create_simple_chunks(
             text="Sample text",
             filename=filename,
-            timestamp="00:01:00",
-            speaker="Speaker 0",
         )
 
         assert len(chunks) > 0
         chunk = chunks[0]
+        assert "metadata" in chunk
         assert "episode" in chunk["metadata"]
         assert chunk["metadata"]["episode"] == filename
         assert "timestamp" in chunk["metadata"]
@@ -117,22 +117,43 @@ TIMESTAMPED TRANSCRIPT WITH SPEAKERS
 
     def test_chunks_are_semantically_meaningful(self):
         """Test that chunks are created with semantic meaning."""
+        import numpy as np
+
         from create_embeddings import DocumentIndexer
 
-        # Create text with semantic differences
-        long_text = (
-            "The history of ancient Greece. " * 50
-            + "Modern technology has changed everything. " * 50
-        )
         indexer = DocumentIndexer()
+        filename = "test.txt"
 
-        chunks = indexer.create_semantic_chunks(long_text)
+        # Create speaker segments with different topics
+        timestamped_sections = [
+            {
+                "text": "The history of ancient Greece is fascinating. " * 20,
+                "timestamp": "00:01:00",
+                "speaker": "Speaker 0",
+            },
+            {
+                "text": "Ancient Greek culture influenced the world. " * 20,
+                "timestamp": "00:02:00",
+                "speaker": "Speaker 1",
+            },
+            {
+                "text": "Modern technology has changed everything. " * 20,
+                "timestamp": "00:03:00",
+                "speaker": "Speaker 0",
+            },
+        ]
+
+        chunks = indexer.create_semantic_chunks_from_speakers(
+            timestamped_sections, filename
+        )
 
         # Should create at least one chunk
         assert len(chunks) >= 1
-        # Each chunk should be reasonable size
+        # Each chunk should have text and metadata
         for chunk in chunks:
-            assert len(chunk) > 50
+            assert len(chunk["text"]) > 50
+            assert "metadata" in chunk
+            assert "episode" in chunk["metadata"]
 
     def test_embedding_creation_for_chunk(self, mock_embedding_model):
         """Test that embeddings are created for chunks."""

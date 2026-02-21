@@ -3,9 +3,22 @@
 
 This script indexes transcript documents by:
 - Parsing transcript format (full text + timestamped sections)
-- Chunking with semantic similarity
+- Chunking with speaker-aware semantic similarity
 - Creating embeddings with sentence-transformers
 - Storing in ChromaDB with episode metadata
+
+Semantic Chunking Approach:
+- Never splits a single speaker's continuous speech
+- Groups consecutive speaker segments if semantically similar
+- Compares each segment to chunk's average embedding (cosine similarity)
+- Enforces min_size before applying similarity cutoff
+
+Configuration (config.json):
+- similarity_threshold (0.0-1.0): Cosine similarity for grouping segments
+  Lower values (0.5-0.7): Strict grouping, only very similar topics → smaller chunks
+  Higher values (0.8-0.95): Loose grouping, related topics together → larger chunks
+- chunk_min_size: Minimum characters per chunk (enforced first)
+- chunk_max_size: Maximum characters (soft limit, speakers never split)
 
 Run this whenever you add or modify transcript files.
 
@@ -18,16 +31,14 @@ Use --force to reindex all files, even if already indexed.
 import argparse
 import os
 import re
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import chromadb
 import logfire
+import numpy as np
 from chromadb.config import Settings
-from langchain_experimental.text_splitter import SemanticChunker
-from langchain_huggingface import HuggingFaceEmbeddings
 from sentence_transformers import SentenceTransformer
 
 from config import config, get_device
@@ -84,20 +95,6 @@ class DocumentIndexer:
         )
         print(f"✅ ChromaDB collection: {config.documents_collection}")
         logfire.info(f"ChromaDB collection ready: {config.documents_collection}")
-
-        # Initialize semantic chunker for intelligent text splitting
-        print("\n⏳ Initializing semantic chunker...")
-        print("   (Loading model for chunking to GPU...)")
-        langchain_embeddings = HuggingFaceEmbeddings(
-            model_name=config.embedding_model, model_kwargs={"device": self.device}
-        )
-        self.semantic_chunker = SemanticChunker(
-            langchain_embeddings,
-            breakpoint_threshold_type="percentile",
-            breakpoint_threshold_amount=int(config.semantic_chunk_threshold * 100),
-        )
-        print(f"✅ Semantic chunker ready on {device_name}")
-        logfire.info("SemanticChunker initialized")
 
         # Track indexed files
         print("\n⏳ Loading index metadata...")
@@ -225,168 +222,202 @@ class DocumentIndexer:
 
         return chunks
 
-    def combine_timestamped_chunks(
-        self, timestamped_sections: list[dict[str, str]]
+    def create_semantic_chunks_from_speakers(
+        self, timestamped_sections: list[dict[str, str]], filename: str
     ) -> list[dict[str, Any]]:
-        """Combine small timestamped sections into larger chunks meeting min_size.
+        """Group speaker segments into semantic chunks without splitting speakers.
+
+        This method:
+        - Never splits what a single speaker says continuously
+        - Groups consecutive speaker segments if semantically similar
+        - Compares each segment to the average embedding of the current chunk
+        - Enforces min_size before considering similarity cutoff
 
         Args:
             timestamped_sections: List of dicts with timestamp, speaker, text
+            filename: Source file name (episode name)
 
         Returns:
-            List of combined chunks with metadata
+            List of chunks with text and metadata
         """
         if not timestamped_sections:
             return []
 
-        combined_chunks = []
+        print(
+            f"   ⏳ Creating embeddings for {len(timestamped_sections)} speaker segments..."
+        )
+        # Create embeddings for all speaker segments at once (faster)
+        segment_texts = [seg["text"] for seg in timestamped_sections]
+        segment_embeddings = self.embedding_model.encode(
+            segment_texts,
+            batch_size=32,
+            show_progress_bar=False,
+            convert_to_tensor=False,
+        )
+
+        print(
+            f"   ⏳ Grouping segments by semantic similarity (threshold: {config.similarity_threshold})..."
+        )
+        chunks = []
         current_chunk = {
             "text": "",
             "start_timestamp": None,
             "end_timestamp": None,
             "speakers": [],
+            "embeddings": [],  # Track all embeddings for averaging
         }
 
-        for section in timestamped_sections:
+        for i, section in enumerate(timestamped_sections):
             text = section["text"]
             timestamp = section.get("timestamp", "")
             speaker = section.get("speaker", "")
+            segment_embedding = segment_embeddings[i]
 
-            # Start new chunk if empty
+            # Format text with speaker name for clarity
+            speaker_text = f"{speaker}: {text}" if speaker else text
+
+            # Start first chunk
             if not current_chunk["text"]:
-                current_chunk["text"] = text
+                current_chunk["text"] = speaker_text
                 current_chunk["start_timestamp"] = timestamp
                 current_chunk["end_timestamp"] = timestamp
                 if speaker and speaker not in current_chunk["speakers"]:
                     current_chunk["speakers"].append(speaker)
-            else:
-                # Add to current chunk
-                current_chunk["text"] += " " + text
+                current_chunk["embeddings"].append(segment_embedding)
+                continue
+
+            # Calculate similarity to current chunk (average of all segments in chunk)
+            chunk_avg_embedding = np.mean(current_chunk["embeddings"], axis=0)
+            similarity = np.dot(chunk_avg_embedding, segment_embedding) / (
+                np.linalg.norm(chunk_avg_embedding) * np.linalg.norm(segment_embedding)
+            )
+
+            # Decide whether to add to current chunk or start new one
+            should_add = False
+
+            # If under min_size, keep adding regardless of similarity
+            if len(current_chunk["text"]) < config.chunk_min_size:
+                should_add = True
+            # If semantically similar, add to chunk
+            elif similarity >= config.similarity_threshold:
+                should_add = True
+
+            if should_add:
+                # Add to current chunk with space separator
+                current_chunk["text"] += " " + speaker_text
                 current_chunk["end_timestamp"] = timestamp
                 if speaker and speaker not in current_chunk["speakers"]:
                     current_chunk["speakers"].append(speaker)
-
-            # If we've reached min_size, save this chunk and start new one
-            if len(current_chunk["text"]) >= config.chunk_min_size:
-                # Don't exceed max_size
-                if len(current_chunk["text"]) <= config.chunk_max_size:
-                    combined_chunks.append(dict(current_chunk))
-                    current_chunk = {
-                        "text": "",
-                        "start_timestamp": None,
-                        "end_timestamp": None,
-                        "speakers": [],
+                current_chunk["embeddings"].append(segment_embedding)
+            else:
+                # Save current chunk and start new one
+                chunks.append(
+                    {
+                        "text": current_chunk["text"],
+                        "metadata": {
+                            "episode": filename,
+                            "timestamp": current_chunk["start_timestamp"],
+                            "speaker": ", ".join(current_chunk["speakers"]),
+                        },
                     }
-                # If over max_size, split it
-                elif len(current_chunk["text"]) > config.chunk_max_size:
-                    # Save what we have and continue with overflow
-                    combined_chunks.append(dict(current_chunk))
-                    current_chunk = {
-                        "text": "",
-                        "start_timestamp": None,
-                        "end_timestamp": None,
-                        "speakers": [],
-                    }
+                )
 
-        # Add final chunk if not empty
+                # Start new chunk
+                current_chunk = {
+                    "text": speaker_text,
+                    "start_timestamp": timestamp,
+                    "end_timestamp": timestamp,
+                    "speakers": [speaker] if speaker else [],
+                    "embeddings": [segment_embedding],
+                }
+
+        # Add final chunk
         if current_chunk["text"]:
-            combined_chunks.append(current_chunk)
+            chunks.append(
+                {
+                    "text": current_chunk["text"],
+                    "metadata": {
+                        "episode": filename,
+                        "timestamp": current_chunk["start_timestamp"],
+                        "speaker": ", ".join(current_chunk["speakers"]),
+                    },
+                }
+            )
 
-        return combined_chunks
+        avg_chunk_size = (
+            sum(len(c["text"]) for c in chunks) / len(chunks) if chunks else 0
+        )
+        print(
+            f"   ✅ Created {len(chunks)} chunks (avg size: {avg_chunk_size:.0f} chars)"
+        )
 
-    def create_semantic_chunks(self, text: str) -> list[str]:
-        """Split text into semantic chunks respecting size constraints.
+        return chunks
 
-        Args:
-            text: Text to chunk
+    def create_simple_chunks(self, text: str, filename: str) -> list[dict[str, Any]]:
+        """Fallback chunking for transcripts without speaker info.
 
-        Returns:
-            List of text chunks
-        """
-        if not text:
-            return []
-
-        # If text is smaller than min_size, return as is
-        if len(text) < config.chunk_min_size:
-            return [text]
-
-        try:
-            # Apply semantic chunking to find topically coherent boundaries
-            raw_chunks = self.semantic_chunker.split_text(text)
-
-            # Combine small chunks and split large ones to meet size constraints
-            final_chunks = []
-            current_chunk = ""
-
-            for chunk in raw_chunks:
-                chunk = chunk.strip()
-                if not chunk:
-                    continue
-
-                # If current chunk would become too large, save it and start new one
-                if (
-                    current_chunk
-                    and len(current_chunk) + len(chunk) + 1 > config.chunk_max_size
-                ):
-                    if len(current_chunk) >= config.chunk_min_size:
-                        final_chunks.append(current_chunk)
-                        current_chunk = chunk
-                    else:
-                        # Current chunk is still too small, keep adding
-                        current_chunk += " " + chunk
-                # If no current chunk, start one
-                elif not current_chunk:
-                    current_chunk = chunk
-                # If combined would be under max_size, combine
-                else:
-                    current_chunk += " " + chunk
-
-                # If current chunk reached min_size and is at a semantic boundary, consider saving
-                if len(current_chunk) >= config.chunk_min_size:
-                    # Check if next iteration would exceed max_size
-                    # For now, continue accumulating until we hit max or run out of chunks
-                    pass
-
-            # Add final chunk if not empty
-            if current_chunk:
-                final_chunks.append(current_chunk)
-
-            return final_chunks if final_chunks else [text]
-
-        except Exception as e:
-            logfire.warn(f"Semantic chunking failed: {e}, using whole text")
-            return [text]
-
-    def create_chunks_with_metadata(
-        self,
-        text: str,
-        filename: str,
-        timestamp: str | None = None,
-        speaker: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Create chunks with metadata.
+        Simply splits text into chunks of approximately chunk_min_size,
+        breaking at sentence boundaries when possible.
 
         Args:
             text: Text to chunk
             filename: Source file name (episode name)
-            timestamp: Optional timestamp
-            speaker: Optional speaker name
 
         Returns:
             List of chunks with metadata
         """
-        semantic_chunks = self.create_semantic_chunks(text)
+        if not text:
+            return []
 
-        chunks_with_metadata = []
-        for chunk in semantic_chunks:
-            metadata = {
-                "episode": filename,
-                "timestamp": timestamp or "",
-                "speaker": speaker or "",
-            }
-            chunks_with_metadata.append({"text": chunk, "metadata": metadata})
+        # If text is smaller than min_size, return as single chunk
+        if len(text) < config.chunk_min_size:
+            return [
+                {
+                    "text": text,
+                    "metadata": {
+                        "episode": filename,
+                        "timestamp": "",
+                        "speaker": "",
+                    },
+                }
+            ]
 
-        return chunks_with_metadata
+        chunks = []
+        current_pos = 0
+
+        while current_pos < len(text):
+            # Try to get a chunk of target size
+            end_pos = min(current_pos + config.chunk_max_size, len(text))
+
+            # If not at the end, try to break at sentence boundary
+            if end_pos < len(text):
+                # Look for sentence endings (., !, ?) within last 20% of chunk
+                search_start = current_pos + int(config.chunk_min_size * 0.8)
+                chunk_text = text[search_start:end_pos]
+
+                # Find last sentence boundary
+                for delimiter in [". ", "! ", "? ", ".\n", "!\n", "?\n"]:
+                    last_delim = chunk_text.rfind(delimiter)
+                    if last_delim != -1:
+                        end_pos = search_start + last_delim + 1
+                        break
+
+            chunk = text[current_pos:end_pos].strip()
+            if chunk:
+                chunks.append(
+                    {
+                        "text": chunk,
+                        "metadata": {
+                            "episode": filename,
+                            "timestamp": "",
+                            "speaker": "",
+                        },
+                    }
+                )
+
+            current_pos = end_pos
+
+        return chunks
 
     def create_embedding(self, text: str) -> list[float]:
         """Create embedding for text.
@@ -476,23 +507,18 @@ class DocumentIndexer:
 
             all_chunks = []
 
-            # Create chunks from timestamped sections (preferred)
+            # Create chunks from timestamped sections (preferred method)
+            # This approach respects speaker boundaries and groups semantically
             if sections["timestamped_chunks"]:
-                print(f"   ⏳ Creating semantic chunks from transcript...")
-                # Concatenate all timestamped text for semantic chunking
-                full_text = " ".join(
-                    [s["text"] for s in sections["timestamped_chunks"]]
-                )
-
-                # Apply semantic chunking to find topically coherent chunks
-                chunks = self.create_chunks_with_metadata(
-                    text=full_text,
+                chunks = self.create_semantic_chunks_from_speakers(
+                    timestamped_sections=sections["timestamped_chunks"],
                     filename=file_path.name,
                 )
                 all_chunks.extend(chunks)
-            # Fallback to full text if no timestamped sections
+            # Fallback to simple chunking if no timestamped sections
             elif sections["full_text"]:
-                chunks = self.create_chunks_with_metadata(
+                print("   ⚠️  No speaker info found, using simple chunking...")
+                chunks = self.create_simple_chunks(
                     text=sections["full_text"],
                     filename=file_path.name,
                 )

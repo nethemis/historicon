@@ -7,6 +7,7 @@ to specialized agents (retrieval agent) for information access.
 import os
 from datetime import datetime
 from pathlib import Path
+import json
 
 import logfire
 import uvicorn
@@ -361,6 +362,122 @@ async def get_full_transcript(
             "page": page,
             "total_pages": 0,
         }
+
+
+@web_orchestrator.tool
+async def list_podcast_info_sections(ctx: RunContext[None]) -> list[str]:
+    """
+    List all available information sections about the HistoriCon podcast.
+    
+    Use this to discover what general podcast information is available.
+    Returns section keys that can be used with get_podcast_info_section().
+    
+    Available sections include:
+    - Basic info, identity, and stats
+    - Hosts and team information
+    - Format and style
+    - Production and technical details
+    - Monetization and funding
+    - Community and audience
+    - And many more...
+    
+    Returns:
+        List of section keys (use these with get_podcast_info_section)
+    
+    Example:
+        sections = list_podcast_info_sections()
+        # Returns: ["ΒΑΣΙΚΑ_ΣΤΟΙΧΕΙΑ", "ΠΑΡΟΥΣΙΑΣΤΕΣ__ΟΜΑΔΑ", ...]
+    """
+    logfire.info("Listing podcast info sections")
+    
+    podcast_info_path = Path(__file__).parent.parent / "podcast_info.json"
+    
+    try:
+        if not podcast_info_path.exists():
+            return ["Error: podcast_info.json not found"]
+        
+        podcast_data = json.loads(podcast_info_path.read_text(encoding="utf-8"))
+        
+        # Return list of section keys with their titles
+        sections = [
+            f"{key} - {data['title']}" 
+            for key, data in podcast_data.items()
+        ]
+        
+        logfire.info(f"Found {len(sections)} podcast info sections")
+        return sections
+        
+    except Exception as e:
+        logfire.error(f"Failed to list podcast info sections: {e}")
+        return [f"Error: {str(e)}"]
+
+
+@web_orchestrator.tool
+async def get_podcast_info_section(
+    ctx: RunContext[None],
+    section_key: str,
+) -> str:
+    """
+    Get detailed information about a specific aspect of the HistoriCon podcast.
+    
+    Use this to retrieve general podcast metadata, NOT episode content.
+    For episode content, use search_documents() instead.
+    
+    IMPORTANT: Call list_podcast_info_sections() first to see available sections!
+    
+    Use this when you need information about:
+    - Podcast hosts, team, or production
+    - Podcast format, style, or history
+    - Release schedule, platforms, or monetization
+    - Community, events, or statistics
+    - Any general podcast background/metadata
+    
+    Args:
+        section_key: Section identifier from list_podcast_info_sections()
+                    (e.g., "ΒΑΣΙΚΑ_ΣΤΟΙΧΕΙΑ", "ΠΑΡΟΥΣΙΑΣΤΕΣ__ΟΜΑΔΑ")
+    
+    Returns:
+        Detailed text content for that section
+    
+    Example:
+        info = get_podcast_info_section("ΠΑΡΟΥΣΙΑΣΤΕΣ__ΟΜΑΔΑ")
+        # Returns info about Κωνσταντίνος Ψυλλίδης, Παύλος Παυλίδης, etc.
+    """
+    logfire.info(f"Retrieving podcast info section: {section_key}")
+    
+    podcast_info_path = Path(__file__).parent.parent / "podcast_info.json"
+    
+    try:
+        if not podcast_info_path.exists():
+            return "Error: podcast_info.json not found. Please ensure the file exists in the project root."
+        
+        podcast_data = json.loads(podcast_info_path.read_text(encoding="utf-8"))
+        
+        # Try exact match first
+        if section_key in podcast_data:
+            section = podcast_data[section_key]
+            result = f"# {section['title']}\n\n{section['content']}"
+            logfire.info(f"Retrieved section: {section_key}")
+            return result
+        
+        # Try partial match (case-insensitive)
+        section_key_upper = section_key.upper()
+        for key, data in podcast_data.items():
+            if section_key_upper in key.upper():
+                result = f"# {data['title']}\n\n{data['content']}"
+                logfire.info(f"Retrieved section (partial match): {key}")
+                return result
+        
+        # Section not found
+        available = ", ".join(list(podcast_data.keys())[:5])
+        return (
+            f"Error: Section '{section_key}' not found.\n\n"
+            f"Available sections (use list_podcast_info_sections() to see all):\n{available}..."
+        )
+        
+    except Exception as e:
+        logfire.error(f"Failed to retrieve podcast info section '{section_key}': {e}")
+        return f"Error loading section: {str(e)}"
 
 
 # Create the web app
