@@ -48,7 +48,7 @@ class TestDocumentIndexer:
     @pytest.fixture
     def mock_embedding_model(self):
         """Mock embedding model to avoid loading real model in tests."""
-        with patch("create_embeddings.SentenceTransformer") as mock:
+        with patch("scripts.create_embeddings.SentenceTransformer") as mock:
             mock_instance = MagicMock()
             mock_instance.encode.return_value = [[0.1] * 384]  # Mock embedding
             mock.return_value = mock_instance
@@ -57,7 +57,7 @@ class TestDocumentIndexer:
     @pytest.fixture
     def mock_chroma(self):
         """Mock ChromaDB client to avoid database operations in tests."""
-        with patch("create_embeddings.chromadb.PersistentClient") as mock:
+        with patch("scripts.create_embeddings.chromadb.PersistentClient") as mock:
             mock_client = MagicMock()
             mock_collection = MagicMock()
             mock_client.get_or_create_collection.return_value = mock_collection
@@ -66,14 +66,14 @@ class TestDocumentIndexer:
 
     def test_indexer_initializes_with_config(self, mock_embedding_model, mock_chroma):
         """Test that DocumentIndexer initializes with configuration."""
-        from create_embeddings import DocumentIndexer
+        from scripts.create_embeddings import DocumentIndexer
 
         indexer = DocumentIndexer()
         assert indexer is not None
 
     def test_indexer_parses_transcript_sections(self):
         """Test that indexer correctly parses transcript sections."""
-        from create_embeddings import DocumentIndexer
+        from scripts.create_embeddings import DocumentIndexer
 
         sample_transcript = """================================================================================
 FULL TRANSCRIPT
@@ -96,7 +96,7 @@ TIMESTAMPED TRANSCRIPT WITH SPEAKERS
 
     def test_chunk_has_episode_metadata(self):
         """Test that chunks include episode metadata."""
-        from create_embeddings import DocumentIndexer
+        from scripts.create_embeddings import DocumentIndexer
 
         indexer = DocumentIndexer()
         filename = "George_Santos_Ο_πολιτικός_που_χρειάζεται_η_Κύπρος_μας.txt"
@@ -119,7 +119,7 @@ TIMESTAMPED TRANSCRIPT WITH SPEAKERS
         """Test that chunks are created with semantic meaning."""
         import numpy as np
 
-        from create_embeddings import DocumentIndexer
+        from scripts.create_embeddings import DocumentIndexer
 
         indexer = DocumentIndexer()
         filename = "test.txt"
@@ -157,7 +157,7 @@ TIMESTAMPED TRANSCRIPT WITH SPEAKERS
 
     def test_embedding_creation_for_chunk(self, mock_embedding_model):
         """Test that embeddings are created for chunks."""
-        from create_embeddings import DocumentIndexer
+        from scripts.create_embeddings import DocumentIndexer
 
         indexer = DocumentIndexer()
         text = "This is a test chunk"
@@ -170,7 +170,7 @@ TIMESTAMPED TRANSCRIPT WITH SPEAKERS
 
     def test_store_chunks_in_chromadb(self, mock_chroma):
         """Test that chunks are stored in ChromaDB with metadata."""
-        from create_embeddings import DocumentIndexer
+        from scripts.create_embeddings import DocumentIndexer
 
         indexer = DocumentIndexer()
         chunks = [
@@ -191,7 +191,7 @@ TIMESTAMPED TRANSCRIPT WITH SPEAKERS
 
     def test_index_single_transcript_file(self, mock_embedding_model, mock_chroma):
         """Test indexing a single transcript file."""
-        from create_embeddings import DocumentIndexer
+        from scripts.create_embeddings import DocumentIndexer
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write(
@@ -223,7 +223,7 @@ Test content.
         """Test that already indexed files are skipped based on timestamp."""
         import time
 
-        from create_embeddings import DocumentIndexer
+        from scripts.create_embeddings import DocumentIndexer
 
         indexer = DocumentIndexer()
 
@@ -255,7 +255,7 @@ Test content.
         """Test that modified files are re-indexed even if already in DB."""
         import time
 
-        from create_embeddings import DocumentIndexer
+        from scripts.create_embeddings import DocumentIndexer
 
         indexer = DocumentIndexer()
 
@@ -286,7 +286,7 @@ Test content.
 
     def test_index_new_file_not_skipped(self, mock_embedding_model, mock_chroma):
         """Test that files never indexed before are not skipped."""
-        from create_embeddings import DocumentIndexer
+        from scripts.create_embeddings import DocumentIndexer
 
         indexer = DocumentIndexer()
 
@@ -308,7 +308,7 @@ Test content.
 
     def test_force_reindex_overwrites_existing(self, mock_embedding_model, mock_chroma):
         """Test that force=True re-indexes existing files."""
-        from create_embeddings import DocumentIndexer
+        from scripts.create_embeddings import DocumentIndexer
 
         indexer = DocumentIndexer()
 
@@ -342,13 +342,13 @@ class TestBatchIndexing:
 
     def test_index_all_transcripts_in_directory(self):
         """Test indexing all transcript files in transcripts directory."""
-        from create_embeddings import index_all_transcripts
+        from scripts.create_embeddings import index_all_transcripts
 
         transcripts_dir = Path(__file__).parent.parent / "transcripts"
         assert transcripts_dir.exists(), "transcripts directory should exist"
 
         # Mock to avoid actual indexing in tests
-        with patch("create_embeddings.DocumentIndexer") as mock_indexer:
+        with patch("scripts.create_embeddings.DocumentIndexer") as mock_indexer:
             mock_instance = MagicMock()
             mock_instance.index_file.return_value = {
                 "success": True,
@@ -365,9 +365,9 @@ class TestBatchIndexing:
 
     def test_parallel_indexing(self):
         """Test that indexing can be parallelized."""
-        from create_embeddings import index_all_transcripts
+        from scripts.create_embeddings import index_all_transcripts
 
-        with patch("create_embeddings.DocumentIndexer") as mock_indexer:
+        with patch("scripts.create_embeddings.DocumentIndexer") as mock_indexer:
             mock_instance = MagicMock()
             mock_instance.index_file.return_value = {
                 "success": True,
@@ -388,7 +388,7 @@ class TestBatchIndexing:
         """
         import time
 
-        from create_embeddings import index_all_transcripts
+        from scripts.create_embeddings import index_all_transcripts
 
         # Create temporary directory with test transcripts
         with tempfile.TemporaryDirectory() as tmpdir:

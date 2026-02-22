@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from preprocess_transcripts import (
+from scripts.preprocess_transcripts import (
     TimestampedEntry,
     combine_consecutive_speakers,
     parse_timestamped_entry,

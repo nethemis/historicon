@@ -37,11 +37,14 @@ uv pip install -e ".[dev]"
 ### 2. Download & Transcribe Podcasts
 
 ```bash
-# Download new episodes from Patreon
-python download_patreon.py
+# Run the full pipeline (downloads, transcribes, preprocesses, creates embeddings)
+./run_pipeline.py
 
-# Transcribe to Greek with speaker diarization
-python transcribe_deepgram.py
+# Or run individual scripts:
+python scripts/download_patreon.py
+python scripts/transcribe_deepgram.py
+python scripts/preprocess_transcripts.py
+python scripts/create_embeddings.py
 ```
 
 ### 3. Run the RAG Agent
@@ -205,10 +208,16 @@ historicon/
 ├── tests/                           # Pytests
 │   ├── test_retrieval.py
 │   └── test_web_orchestrator.py
+├── scripts/                         # Setup pipeline scripts
+│   ├── download_patreon.py          # Patreon RSS downloader
+│   ├── transcribe_deepgram.py       # Deepgram transcription
+│   ├── preprocess_transcripts.py    # Clean transcripts
+│   └── create_embeddings.py         # Index for RAG
 ├── inputs/                          # Downloaded audio (gitignored)
-├── transcripts/                     # Greek transcripts with timestamps
-├── download_patreon.py              # Patreon RSS downloader
-├── transcribe_deepgram.py           # Deepgram transcription
+├── transcripts/                     # Raw transcripts with timestamps
+├── transcripts_processed/           # Cleaned transcripts (committed)
+├── chroma_db/                       # Vector database (gitignored)
+├── run_pipeline.py                  # Run all setup scripts
 ├── trim_audio.py                    # Audio trimming utility
 ├── pyproject.toml                   # Dependencies
 └── README.md                        # This file
