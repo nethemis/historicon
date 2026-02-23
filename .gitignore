@@ -1,3 +1,47 @@
+# Audio inputs
 inputs/*
+
+# Virtual environments
 venv/*
-.venv/*chroma_db/*
+.venv/*
+
+# ChromaDB vector database (can be regenerated)
+chroma_db/*
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# macOS
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+.~*

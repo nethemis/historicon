@@ -492,7 +492,7 @@ class DocumentIndexer:
             if sections["timestamped_chunks"]:
                 chunks = self.create_semantic_chunks_from_speakers(
                     timestamped_sections=sections["timestamped_chunks"],
-                    filename=file_path.stem,  # Use stem (without .txt) for consistency
+                    filename=file_path.name,  # Use full filename with .txt extension
                 )
                 all_chunks.extend(chunks)
             # Fallback to simple chunking if no timestamped sections
@@ -500,7 +500,7 @@ class DocumentIndexer:
                 print("   ⚠️  No speaker info found, using simple chunking...")
                 chunks = self.create_simple_chunks(
                     text=sections["full_text"],
-                    filename=file_path.stem,  # Use stem (without .txt) for consistency
+                    filename=file_path.name,  # Use full filename with .txt extension
                 )
                 all_chunks.extend(chunks)
 
@@ -542,7 +542,7 @@ class DocumentIndexer:
         """Get the timestamp of when a file was last indexed.
 
         Args:
-            episode_name: Episode name (filename without .txt)
+            episode_name: Episode name (full filename with .txt extension)
 
         Returns:
             Unix timestamp of last indexing, or None if not indexed
@@ -575,7 +575,7 @@ class DocumentIndexer:
         if force:
             return False
 
-        episode_name = file_path.stem
+        episode_name = file_path.name  # Use full filename with extension
 
         # Check if file has been indexed and get its timestamp
         indexed_timestamp = self.get_existing_file_timestamp(episode_name)

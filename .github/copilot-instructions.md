@@ -234,31 +234,37 @@ first_28_seconds.export("sample_28s.mp3", format="mp3")
 - Retrieve specific time range from an episode
 - Takes episode filename + start/end timestamps (HH:MM:SS format)
 - Best for: getting context around a specific timestamp from search results
-- Example: `get_transcript_section("George_Santos.txt", "00:15:30", "00:20:00")`
+- **CRITICAL:** Use the EXACT filename from search_documents results (includes full Greek title)
+- Example: `get_transcript_section("George_Santos_Ο_πολιτικός_που_χρειάζεται_η_Κύπρος_μας.txt", "00:15:30", "00:20:00")`
 
 **3. `get_full_transcript` (PAGINATED - Use Sparingly!)**
 - Access full transcript page by page (10k tokens per page)
 - Returns dict with: `{"content": str, "end_of_file": bool, "page": int, "total_pages": int}`
 - Best for: sequential reading of entire episode (rare use case)
 - **WARNING:** Full transcripts are very long, prefer `search_documents`
-- Example: `get_full_transcript("Episode.txt", page=1)`
+- **CRITICAL:** Use the EXACT filename from search_documents results (includes full Greek title)
+- Example: `get_full_transcript("George_Santos_Ο_πολιτικός_που_χρειάζεται_η_Κύπρος_μας.txt", page=1)`
 
 ### Tool Usage Pattern
 ```python
 # 1. Start with search to find relevant content
 results = search_documents("Κοσκωτάς σκάνδαλο", max_results=5)
 
-# 2. If need more context around a timestamp, use section retrieval
+# 2. Extract the EXACT episode filename from search results
+# IMPORTANT: Use the full filename exactly as returned, do NOT abbreviate!
+episode_from_results = results.chunks[0].source  # e.g., "(Corrected_Audio)_Γ._Κοσκωτάς_Το_σκάνδαλο_που_συγκλόνισε_την_Ελλάδα.txt"
+
+# 3. Use that exact filename for further queries
 section = get_transcript_section(
-    episode_name="Γ._Κοσκωτάς.txt",
+    episode_name=episode_from_results,  # Use exact filename from search results
     start_time="00:15:00",
     end_time="00:20:00"
 )
 
-# 3. Only use full transcript if explicitly requested
-page1 = get_full_transcript("Episode.txt", page=1)
+# 4. Only use full transcript if explicitly requested
+page1 = get_full_transcript(episode_from_results, page=1)  # Use exact filename
 if not page1["end_of_file"]:
-    page2 = get_full_transcript("Episode.txt", page=2)
+    page2 = get_full_transcript(episode_from_results, page=2)
 ```
 
 ### Context Size Limits

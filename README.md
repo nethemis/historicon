@@ -24,55 +24,145 @@ Patreon RSS → Audio Files → Deepgram → Greek Transcripts → Vector DB →
 
 ## 🚀 Quick Start
 
-### 1. Setup Environment
+### Step 1: Choose Your AI Model
 
+You have two options for running the RAG agent:
+
+#### Option A: Ollama (Free, Slower)
+Ollama provides free access to open-source models. Models run locally or via their cloud API.
+
+**1. Install Ollama:**
+- Download from [https://ollama.com/download](https://ollama.com/download)
+- Follow installation instructions for your platform
+
+**2. Pull the models:**
 ```bash
-# Setup secrets and environment (project-specific command)
-secrets && se
+# Pull both models used by the agent
+ollama pull gpt-oss:120b-cloud
+ollama pull minimax-m2.5:cloud
+```
 
-# Install dependencies with uv
+**3. Get Ollama Cloud API Key (Required, but Free!):**
+- Visit [https://ollama.com](https://ollama.com) and create a free account
+- Generate an API key from your dashboard (no cost)
+- Set the environment variable:
+```bash
+export OLLAMA_API_KEY="your-ollama-api-key"
+```
+
+#### Option B: Claude (Paid, Faster, More Capable)
+Anthropic's Claude Sonnet 4.5 provides superior reasoning and speed.
+
+**1. Get an API key:**
+- Visit [https://console.anthropic.com](https://console.anthropic.com)
+- Create an account and generate an API key
+
+**2. Set the environment variable:**
+```bash
+export ANTHROPIC_API_KEY="your-anthropic-api-key"
+```
+
+---
+
+### Step 2: Install Dependencies
+
+**1. Install `uv` (fast Python package manager):**
+```bash
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Or with pip
+pip install uv
+```
+
+**2. Create virtual environment and install packages:**
+```bash
+# Create virtual environment
+uv venv
+
+# Activate the virtual environment
+source .venv/bin/activate  # macOS/Linux
+# Or on Windows: .venv\Scripts\activate
+
+# Install all dependencies
 uv pip install -e ".[dev]"
 ```
 
-### 2. Download & Transcribe Podcasts
+---
+
+### Step 3: Create Embeddings Database
+
+To create the vector embeddings from the processed transcripts:
 
 ```bash
-# Run the full pipeline (downloads, transcribes, preprocesses, creates embeddings)
-./run_pipeline.py
-
-# Or run individual scripts:
-python scripts/download_patreon.py
-python scripts/transcribe_deepgram.py
-python scripts/preprocess_transcripts.py
-python scripts/create_embeddings.py
+# Create embeddings from processed transcripts
+uv run python scripts/create_embeddings.py
 ```
 
-### 3. Run the RAG Agent
+This will:
+- Read all transcripts from `transcripts_processed/`
+- Generate multilingual embeddings (supports Greek)
+- Create semantic chunks using speaker-aware chunking
+- Store everything in `chroma_db/` for fast retrieval
+
+**Note:** This step takes a few minutes depending on the hardware, but you only need to run it once (unless you add new episodes).
+
+---
+
+### Step 4: Run the RAG Agent
 
 ```bash
-# Start the web server
-python -m agents.web_orchestrator
+# Start the web server (runs on http://localhost:8001)
+uv run python agents/web_orchestrator.py
+```
 
-# Or run the example script
-python agents/example_usage.py
+The web interface will be available at `http://localhost:8001` where you can:
+- Ask questions about podcast episodes
+- Search through transcripts
+- Get episode information
+
+---
+
+### Step 5: (Optional) Set Up Podcast Pipeline
+
+If you want to download and transcribe new podcast episodes:
+
+**1. Set up Deepgram API key (required for transcription):**
+```bash
+export DEEPGRAM_API_KEY="your-deepgram-api-key"
+```
+Get your key at [https://console.deepgram.com](https://console.deepgram.com)
+
+**2. Run the full pipeline:**
+```bash
+# Downloads, transcribes, preprocesses, and creates embeddings
+uv run ./run_pipeline.py
+
+# Or run individual scripts:
+uv run python scripts/download_patreon.py
+uv run python scripts/transcribe_deepgram.py
+uv run python scripts/preprocess_transcripts.py
+uv run python scripts/create_embeddings.py
 ```
 
 ## 📋 Requirements
 
-### Environment Variables
+- **Python 3.13+**
+- **Package manager:** `uv` (fast Python installer)
 
-**Required:**
-- `ANTHROPIC_API_KEY` - Claude API key for AI agents
-- `DEEPGRAM_API_KEY` - For Greek transcription
+### Environment Variables Reference
 
-**Optional:**
-- `LOGFIRE_TOKEN` - For observability (tracking agent performance)
+**For AI Models:**
+- `ANTHROPIC_API_KEY` - Claude API key (if using Claude)
+- `OLLAMA_API_KEY` - Ollama Cloud API key (optional, for cloud models)
+
+**For Podcast Pipeline:**
+- `DEEPGRAM_API_KEY` - For Greek transcription (see Quick Start Step 5)
+
+**Optional (Observability):**
+- `LOGFIRE_TOKEN` - For tracking agent performance
 - `LOGFIRE_SERVICE_NAME` - Service name in logs (default: "historicon-rag-agent")
 - `ENVIRONMENT` - Environment name (default: "development")
-
-### Python Version
-- Python 3.13+
-- Package manager: `uv` (fast Python installer)
 
 ## ⚙️ Configuration
 
@@ -229,13 +319,13 @@ historicon/
 
 ```bash
 # Run all tests
-pytest
+uv run pytest
 
 # Run with coverage
-pytest --cov=agents --cov-report=html
+uv run pytest --cov=agents --cov-report=html
 
 # Run specific test file
-pytest tests/test_retrieval.py
+uv run pytest tests/test_retrieval.py
 ```
 
 ### Project Conventions
@@ -277,40 +367,29 @@ pytest tests/test_retrieval.py
 - **Concurrency:** 5 workers (API limit)
 - **Model:** Deepgram Nova-3
 - **Language:** Greek (`el`)
-- **Features:** 
-  - Speaker diarization
-  - Smart formatting
-  - Punctuation
-  - Timestamps
+- **Features:** Speaker diarization, timestamps, smart formatting, punctuation
 - **Output:** `transcripts/*.txt` with full text + timestamped sections
-
-### Transcript Format
-```
-================================================================================
-FULL TRANSCRIPT
-================================================================================
-[Complete Greek text without timestamps]
-
-================================================================================
-TIMESTAMPED TRANSCRIPT WITH SPEAKERS
-================================================================================
-[00:01:28.990 - 00:01:30.350] Speaker 0:
-[Greek text for this segment]
-```
+- **Processing:** Transcripts are then preprocessed (speakers combined, headers removed) and stored in `transcripts_processed/`
 
 ## 🤖 Agent System
 
-### Current Status
+### Architecture
 
-⚠️ **Dummy Implementation**: The retrieval agent currently returns mock data.
+The system uses a **multi-agent architecture** with specialized agents:
 
-### To Implement Full RAG:
-1. Add embedding model (e.g., `sentence-transformers` with Greek model)
-2. Add vector database (e.g., ChromaDB, FAISS, Qdrant)
-3. Index transcripts from `transcripts/` directory
-4. Replace dummy `search_transcripts` with real vector search
-5. Implement semantic chunking strategy
-6. Add reranking for better results
+- **Web Orchestrator** - Main entry point, delegates to specialized tools
+- **Retrieval Agent** - Searches indexed transcripts using ChromaDB vector store
+- **RAG Pipeline** - Semantic search with reranking for accurate results
+
+### Features
+
+✅ **Fully Implemented:**
+- Multilingual embeddings (supports Greek)
+- ChromaDB vector database with semantic search
+- Speaker-aware semantic chunking
+- Reranking for improved relevance
+- Multiple search tools (semantic search, time-range queries, full transcripts)
+- Podcast metadata access via `podcast_info.json`
 
 ### API Usage
 
@@ -332,7 +411,7 @@ print(retrieval_result.output.summary)
 
 ```bash
 # Start server on port 8001
-python -m agents.web_orchestrator
+uv run python agents/web_orchestrator.py
 
 # Query via HTTP
 curl -X POST http://localhost:8001/run \
@@ -342,25 +421,15 @@ curl -X POST http://localhost:8001/run \
 
 ## 📚 Tech Stack
 
-### Core
 - **Python 3.13+** with `uv` for fast package management
-- **Pydantic** - Data validation and models
-- **Pydantic AI** - AI agent framework with type safety
-
-### AI/ML
-- **Anthropic Claude** - Sonnet 4.5 for agent reasoning
-- **Deepgram** - Greek speech-to-text transcription
+- **Pydantic & Pydantic AI** - Type-safe data models and AI agents
+- **Anthropic Claude Sonnet 4.5** - Advanced reasoning for orchestration
+- **Ollama** - Free open-source models (GPT-OSS, MiniMax)
+- **Deepgram Nova-3** - Greek speech-to-text transcription
+- **ChromaDB** - Vector database for semantic search
+- **sentence-transformers** - Multilingual embeddings
 - **Logfire** - AI observability and monitoring
-
-### Data Processing
-- **feedparser** - Patreon RSS parsing
-- **requests** - HTTP downloads with streaming
-- **pydub** - Audio file manipulation
-
-### Future RAG Stack
-- **sentence-transformers** - Text embeddings
-- **ChromaDB/FAISS** - Vector database
-- **langchain** (optional) - RAG utilities
+- **feedparser, requests, pydub** - Data processing utilities
 
 ## 🐛 Common Issues
 
