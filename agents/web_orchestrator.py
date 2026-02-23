@@ -59,6 +59,11 @@ minimax = OpenAIChatModel(
     provider=OllamaProvider(base_url="https://ollama.com/v1"),
 )
 
+qwen3_local = OpenAIChatModel(
+    model_name="qwen3:8b",
+    provider=OllamaProvider(base_url="http://localhost:11434/v1"),
+)
+
 
 # Web orchestrator agent - delegates to specialized agents
 web_orchestrator = Agent(
@@ -492,13 +497,29 @@ async def get_podcast_info_section(
         return f"Error loading section: {str(e)}"
 
 
+# Build models dict based on available API keys
+available_models = {
+    "qwen3:8b (fully local)": qwen3_local,  # Always available - no API key needed
+}
+
+# Add Ollama cloud models if OLLAMA_API_KEY is set
+if os.getenv("OLLAMA_API_KEY"):
+    available_models["Ollama-GPT"] = ollama_model
+    available_models["Ollama-MiniMax"] = minimax
+    logfire.info("Ollama cloud models available (OLLAMA_API_KEY found)")
+else:
+    logfire.info("Ollama cloud models unavailable (OLLAMA_API_KEY not set)")
+
+# Add Claude if ANTHROPIC_API_KEY is set
+if os.getenv("ANTHROPIC_API_KEY"):
+    available_models["Claude"] = "anthropic:claude-sonnet-4-5"
+    logfire.info("Claude model available (ANTHROPIC_API_KEY found)")
+else:
+    logfire.info("Claude model unavailable (ANTHROPIC_API_KEY not set)")
+
 # Create the web app
 app = web_orchestrator.to_web(
-    models={
-        "Ollama-GPT": ollama_model,
-        "Ollama-MiniMax": minimax,
-        "Claude": "anthropic:claude-sonnet-4-5",
-    },
+    models=available_models,
     builtin_tools=[CodeExecutionTool(), WebSearchTool()],
 )
 

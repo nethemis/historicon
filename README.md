@@ -40,6 +40,7 @@ Ollama provides free access to open-source models. Models run locally or via the
 # Pull both models used by the agent
 ollama pull gpt-oss:120b-cloud
 ollama pull minimax-m2.5:cloud
+ollama pull qwen3:8b
 ```
 
 **3. Get Ollama Cloud API Key (Required, but Free!):**
