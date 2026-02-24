@@ -1,12 +1,20 @@
 import os
 import re
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
 import feedparser
 import requests
 
-RSS_URL = "https://www.patreon.com/rss/istorikon?auth=***REMOVED***&show=866770"
+# Read Patreon RSS token from environment variable
+PATREON_RSS_TOKEN = os.getenv("PATREON_RSS_TOKEN")
+if not PATREON_RSS_TOKEN:
+    print("❌ ERROR: PATREON_RSS_TOKEN environment variable is not set!")
+    print("   Set it with: export PATREON_RSS_TOKEN='your_token_here'")
+    sys.exit(1)
+
+RSS_URL = f"https://www.patreon.com/rss/istorikon?auth={PATREON_RSS_TOKEN}&show=866770"
 DOWNLOAD_DIR = "inputs"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
