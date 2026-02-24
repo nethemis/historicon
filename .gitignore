@@ -45,3 +45,18 @@ htmlcov/
 *.bak
 *.backup
 .~*
+# Environment variables & secrets
+.env
+.env.local
+.env*.local
+.secrets/
+.logfire/
+*.key
+*.pem
+*.p12
+credentials.json
+*.credentials
+
+# IDE secrets
+.vscode/*.local.*
+.idea/credentials.xml
