@@ -148,7 +148,7 @@ uv run python scripts/create_embeddings.py
 
 ## 📋 Requirements
 
-- **Python 3.13+**
+- **Python 3.12** (pinned `>=3.12,<3.13` in `pyproject.toml`)
 - **Package manager:** `uv` (fast Python installer)
 
 ### Environment Variables Reference
@@ -422,7 +422,7 @@ curl -X POST http://localhost:8001/run \
 
 ## 📚 Tech Stack
 
-- **Python 3.13+** with `uv` for fast package management
+- **Python 3.12** with `uv` for fast package management
 - **Pydantic & Pydantic AI** - Type-safe data models and AI agents
 - **Anthropic Claude Sonnet 4.5** - Advanced reasoning for orchestration
 - **Ollama** - Free open-source models (GPT-OSS, MiniMax)

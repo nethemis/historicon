@@ -3,7 +3,7 @@ name = "historicon"
 version = "0.1.0"
 description = "Greek podcast RAG agent with multi-agent orchestration"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "pydantic>=2.0.0",
     "pydantic-ai>=0.0.1",
@@ -18,6 +18,12 @@ dependencies = [
     "sentence-transformers>=2.2.0",
     "numpy>=1.24.0",
     "torch>=2.0.0",
+    "mlx-whisper>=0.4.3",
+    "silero-vad>=6.2.0",
+    "torchcodec>=0.10.0",
+    "ollama>=0.6.1",
+    "transformers>=5.2.0",
+    "librosa>=0.11.0",
 ]
 
 [project.optional-dependencies]

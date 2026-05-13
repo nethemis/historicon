@@ -20,7 +20,7 @@ class TestConfig:
 
     def test_config_has_embedding_model(self):
         """Test that config contains embedding model setting."""
-        from config import config
+        from agents.config import config
 
         assert hasattr(config, "embedding_model")
         assert isinstance(config.embedding_model, str)
@@ -28,14 +28,14 @@ class TestConfig:
 
     def test_config_has_chroma_db_path(self):
         """Test that config contains ChromaDB path setting."""
-        from config import config
+        from agents.config import config
 
         assert hasattr(config, "chroma_db_dir")
         assert config.chroma_db_dir is not None
 
     def test_config_has_collection_name(self):
         """Test that config contains collection name."""
-        from config import config
+        from agents.config import config
 
         assert hasattr(config, "documents_collection")
         assert isinstance(config.documents_collection, str)
@@ -409,7 +409,7 @@ Test transcript {i}
                 test_files.append(test_file)
 
             # Patch config to use temp directory
-            from config import config
+            from agents.config import config
 
             original_dir = config.transcripts_dir
             original_db = config.chroma_db_dir

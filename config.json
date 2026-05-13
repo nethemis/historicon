@@ -16,5 +16,9 @@
   "indexing_workers": 3,
   "transcription_workers": 5,
   "deepgram_model": "nova-3",
-  "deepgram_language": "el"
+  "deepgram_language": "el",
+  "speaker_map": {
+    "Speaker 0": "Κωνσταντίνος Ψυλλίδης",
+    "Speaker 1": "Παύλος Παυλίδης"
+  }
 }

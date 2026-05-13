@@ -1,238 +1,125 @@
-"""Tests for the retrieval agent.
+"""Tests for the retrieval module.
 
-Following TDD methodology - write tests first, then implement features.
-Mocks ChromaDB to avoid requiring actual database in tests.
+The retrieval layer is now a plain function (`search_transcripts`) backed by
+`ChromaRetriever`, which does Chroma top-k + CrossEncoder reranking. Tests
+mock both the Chroma collection and the CrossEncoder to avoid touching real
+models or the database.
 """
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agents.models import RetrievalChunk, RetrievalResponse
+from agents.models import RetrievalResponse
 
 
-@pytest.mark.asyncio
-@patch("agents.retrieval.retrieval_agent.run")
-async def test_retrieval_agent_returns_valid_response(mock_run):
-    """Test that retrieval agent returns a properly structured RetrievalResponse."""
-    # Mock the response
-    mock_result = MagicMock()
-    mock_result.output = RetrievalResponse(
-        chunks=[
-            RetrievalChunk(
-                text="Sample Greek text about history",
-                source="test_episode.txt",
-                score=0.95,
-                timestamp="00:01:30.000",
-            )
-        ],
-        summary="Found information about historical topic.",
-        query="test query",
-        total_results=1,
+def _make_retriever(docs, metadatas, rerank_logits):
+    """Build a MagicMock ChromaRetriever-shape with the canned Chroma + rerank output."""
+    retriever = MagicMock()
+    retriever.collection.query.return_value = {
+        "documents": [docs],
+        "metadatas": [metadatas],
+        "distances": [[0.1] * len(docs)],
+    }
+    retriever.embedding_model.encode.return_value = MagicMock(
+        tolist=lambda: [0.0] * 8
     )
-    mock_run.return_value = mock_result
-
-    from agents.retrieval import retrieval_agent
-
-    result = await retrieval_agent.run("Search for: test query (max 5 results)")
-
-    assert result.output is not None
-    assert isinstance(result.output, RetrievalResponse)
-    assert len(result.output.chunks) > 0
-    assert result.output.summary is not None
+    retriever.reranker.predict.return_value = rerank_logits
+    return retriever
 
 
-@pytest.mark.asyncio
-@patch("agents.retrieval.retrieval_agent.run")
-async def test_retrieval_agent_handles_greek_query(mock_run):
-    """Test that retrieval agent handles Greek language queries."""
-    mock_result = MagicMock()
-    mock_result.output = RetrievalResponse(
-        chunks=[
-            RetrievalChunk(
-                text="Ελληνικό κείμενο για ιστορία",
-                source="greek_episode.txt",
-                score=0.88,
-                timestamp="00:05:45.000",
-            )
-        ],
-        summary="Βρέθηκαν πληροφορίες για το θέμα.",
-        query="ιστορία Κύπρου",
-        total_results=1,
+def test_search_transcripts_happy_path():
+    """search_transcripts returns chunks with sources and a summary."""
+    from agents import retrieval
+
+    fake = _make_retriever(
+        docs=["Greek text about history"],
+        metadatas=[{"episode": "ep1.txt", "timestamp": "00:01:30.000"}],
+        rerank_logits=[2.0],
     )
-    mock_run.return_value = mock_result
+    # Drive the real ChromaRetriever.search through the mocked attributes.
+    with patch.object(retrieval, "get_retriever") as get_r:
+        real_search = retrieval.ChromaRetriever.search.__get__(fake)
+        fake.search = real_search
+        get_r.return_value = fake
 
-    from agents.retrieval import retrieval_agent
+        result = retrieval.search_transcripts("ιστορία Κύπρου", max_results=5)
 
-    result = await retrieval_agent.run("Search for: ιστορία Κύπρου (max 5 results)")
-
-    assert result.output is not None
-    assert isinstance(result.output, RetrievalResponse)
-
-
-@pytest.mark.asyncio
-@patch("agents.retrieval.retrieval_agent.run")
-async def test_retrieval_agent_respects_max_results(mock_run):
-    """Test that retrieval agent respects the max_results parameter."""
-    mock_result = MagicMock()
-    mock_result.output = RetrievalResponse(
-        chunks=[
-            RetrievalChunk(
-                text=f"Text chunk {i}",
-                source=f"episode_{i}.txt",
-                score=0.9 - i * 0.1,
-                timestamp=f"00:0{i}:00.000",
-            )
-            for i in range(3)
-        ],
-        summary="Found 3 results as requested.",
-        query="test",
-        total_results=3,
-    )
-    mock_run.return_value = mock_result
-
-    from agents.retrieval import retrieval_agent
-
-    result = await retrieval_agent.run("Search for: test (max 3 results)")
-
-    assert result.output is not None
-    assert len(result.output.chunks) <= 3
+    assert isinstance(result, RetrievalResponse)
+    assert result.total_results == 1
+    assert result.chunks[0].source == "ep1.txt"
+    assert result.chunks[0].timestamp == "00:01:30.000"
+    assert 0.0 <= result.chunks[0].score <= 1.0
+    assert "ep1.txt" in result.summary
 
 
-@pytest.mark.asyncio
-@patch("agents.retrieval.retrieval_agent.run")
-async def test_retrieval_agent_handles_no_results(mock_run):
-    """Test that retrieval agent handles queries with no matching results."""
-    mock_result = MagicMock()
-    mock_result.output = RetrievalResponse(
-        chunks=[],
-        summary="No relevant information found.",
-        query="nonexistent topic XYZ123",
-        total_results=0,
-    )
-    mock_run.return_value = mock_result
+def test_search_transcripts_no_results():
+    """Empty Chroma results produce an empty RetrievalResponse with a clear summary."""
+    from agents import retrieval
 
-    from agents.retrieval import retrieval_agent
+    fake = _make_retriever(docs=[], metadatas=[], rerank_logits=[])
+    with patch.object(retrieval, "get_retriever") as get_r:
+        fake.search = retrieval.ChromaRetriever.search.__get__(fake)
+        get_r.return_value = fake
 
-    result = await retrieval_agent.run(
-        "Search for: nonexistent topic XYZ123 (max 5 results)"
-    )
+        result = retrieval.search_transcripts("nonexistent topic", max_results=5)
 
-    assert result.output is not None
-    assert len(result.output.chunks) == 0
-    assert result.output.total_results == 0
+    assert result.total_results == 0
+    assert result.chunks == []
+    assert "No relevant information" in result.summary
 
 
-@pytest.mark.asyncio
-@patch("agents.retrieval.retrieval_agent.run")
-async def test_retrieval_agent_includes_timestamps(mock_run):
-    """Test that retrieval agent includes timestamps in results."""
-    mock_result = MagicMock()
-    mock_result.output = RetrievalResponse(
-        chunks=[
-            RetrievalChunk(
-                text="Timestamped content",
-                source="episode.txt",
-                score=0.92,
-                timestamp="00:12:34.567",
-            )
-        ],
-        summary="Found timestamped content.",
-        query="test",
-        total_results=1,
-    )
-    mock_run.return_value = mock_result
+def test_search_transcripts_swallows_errors():
+    """Retrieval failures return an empty response with the error in the summary."""
+    from agents import retrieval
 
-    from agents.retrieval import retrieval_agent
+    with patch.object(retrieval, "get_retriever", side_effect=RuntimeError("boom")):
+        result = retrieval.search_transcripts("query", max_results=5)
 
-    result = await retrieval_agent.run("Search for: test (max 5 results)")
-
-    assert result.output.chunks[0].timestamp is not None
-    assert ":" in result.output.chunks[0].timestamp
+    assert result.total_results == 0
+    assert "Search error" in result.summary
+    assert "boom" in result.summary
 
 
-@pytest.mark.asyncio
-async def test_retrieval_agent_has_retries():
-    """Test that retrieval agent is properly configured."""
-    from agents.retrieval import RetrievalAgent, retrieval_agent
+def test_reranker_reorders_results():
+    """CrossEncoder logits drive the final order, not Chroma distances.
 
-    # Verify agent is properly configured
-    assert retrieval_agent is not None
-    assert isinstance(retrieval_agent, RetrievalAgent)
-    # Retrieval agent performs deterministic semantic search, so retries not needed
+    Chroma returns A, B, C; the reranker scores them 0.1, 0.9, 0.5.
+    Expect chunks in order B, C, A.
+    """
+    from agents import retrieval
 
+    docs = ["doc A", "doc B", "doc C"]
+    metas = [{"episode": f"ep{c}.txt"} for c in "ABC"]
+    fake = _make_retriever(docs=docs, metadatas=metas, rerank_logits=[0.1, 0.9, 0.5])
 
-@pytest.mark.asyncio
-@patch("agents.retrieval.retrieval_agent.run")
-async def test_retrieval_agent_scores_are_normalized(mock_run):
-    """Test that retrieval agent returns normalized scores (0-1)."""
-    mock_result = MagicMock()
-    mock_result.output = RetrievalResponse(
-        chunks=[
-            RetrievalChunk(
-                text="High relevance text",
-                source="episode.txt",
-                score=0.95,
-                timestamp="00:00:10.000",
-            ),
-            RetrievalChunk(
-                text="Medium relevance text",
-                source="episode2.txt",
-                score=0.75,
-                timestamp="00:05:20.000",
-            ),
-        ],
-        summary="Found 2 results with different relevance scores.",
-        query="test",
-        total_results=2,
-    )
-    mock_run.return_value = mock_result
+    with patch.object(retrieval, "get_retriever") as get_r:
+        fake.search = retrieval.ChromaRetriever.search.__get__(fake)
+        get_r.return_value = fake
 
-    from agents.retrieval import retrieval_agent
+        result = retrieval.search_transcripts("query", max_results=3)
 
-    result = await retrieval_agent.run("Search for: test (max 5 results)")
-
-    for chunk in result.output.chunks:
-        assert 0.0 <= chunk.score <= 1.0
+    assert [c.source for c in result.chunks] == ["epB.txt", "epC.txt", "epA.txt"]
+    # Scores monotonically decreasing after sort.
+    scores = [c.score for c in result.chunks]
+    assert scores == sorted(scores, reverse=True)
+    # Sigmoid keeps everything in [0, 1].
+    assert all(0.0 <= s <= 1.0 for s in scores)
 
 
-@pytest.mark.asyncio
-@patch("agents.retrieval.ChromaRetriever")
-async def test_chroma_retriever_initialization(mock_chroma_class):
-    """Test that ChromaRetriever initializes correctly."""
-    from agents.retrieval import ChromaRetriever
+def test_reranker_respects_max_results():
+    """max_results truncates the reranked list."""
+    from agents import retrieval
 
-    retriever = ChromaRetriever()
+    docs = [f"doc {i}" for i in range(5)]
+    metas = [{"episode": f"ep{i}.txt"} for i in range(5)]
+    fake = _make_retriever(docs=docs, metadatas=metas, rerank_logits=[5, 4, 3, 2, 1])
 
-    # Should initialize embedding model and chroma client
-    assert retriever is not None
+    with patch.object(retrieval, "get_retriever") as get_r:
+        fake.search = retrieval.ChromaRetriever.search.__get__(fake)
+        get_r.return_value = fake
 
+        result = retrieval.search_transcripts("query", max_results=2)
 
-@pytest.mark.asyncio
-@patch("agents.retrieval.ChromaRetriever")
-async def test_chroma_retriever_search(mock_chroma_class):
-    """Test that ChromaRetriever.search returns proper results."""
-    from agents.retrieval import ChromaRetriever
-
-    # Mock the search
-    mock_retriever = MagicMock()
-    mock_retriever.search.return_value = [
-        {
-            "text": "Test content",
-            "metadata": {
-                "episode": "test.txt",
-                "timestamp": "00:01:00.000",
-                "speaker": "Speaker 0",
-            },
-            "score": 0.9,
-        }
-    ]
-    mock_chroma_class.return_value = mock_retriever
-
-    retriever = ChromaRetriever()
-    results = retriever.search("test query", max_results=5)
-
-    assert len(results) > 0
-    assert "text" in results[0]
-    assert "metadata" in results[0]
-    assert "score" in results[0]
+    assert result.total_results == 2
+    assert [c.source for c in result.chunks] == ["ep0.txt", "ep1.txt"]

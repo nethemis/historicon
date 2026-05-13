@@ -5,7 +5,7 @@ from pathlib import Path
 
 from deepgram import DeepgramClient
 
-from config import config
+from agents.config import config
 
 
 def format_timestamp(seconds):

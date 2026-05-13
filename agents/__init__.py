@@ -1,16 +1,9 @@
-"""HistoriCon Multi-Agent RAG System.
+"""HistoriCon multi-agent RAG package.
 
-This package provides a multi-agent system for querying Greek podcast transcripts
-using retrieval-augmented generation (RAG).
-
-Agents:
-- web_orchestrator: Main entry point, orchestrates requests
-- retrieval: Searches and retrieves relevant document chunks (dummy implementation)
-
-All agents follow project conventions:
-- Pydantic BaseModels for all inputs/outputs
-- retries=5 configured
-- Logfire observability integration
+Exports:
+- web_orchestrator: Pydantic-AI agent serving the web UI / API.
+- search_transcripts: Direct ChromaDB + CrossEncoder search function.
+- Shared Pydantic models for cross-agent IO.
 """
 
 from .models import (
@@ -21,11 +14,11 @@ from .models import (
     RetrievalChunk,
     RetrievalResponse,
 )
-from .retrieval import retrieval_agent
+from .retrieval import search_transcripts
 from .web_orchestrator import web_orchestrator
 
 __all__ = [
-    "retrieval_agent",
+    "search_transcripts",
     "web_orchestrator",
     "RetrievalChunk",
     "RetrievalResponse",

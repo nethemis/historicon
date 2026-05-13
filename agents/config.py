@@ -80,6 +80,10 @@ class Config(BaseModel):
     deepgram_language: str = Field(
         default="el", description="Language code for transcription (el=Greek)"
     )
+    speaker_map: dict[str, str] = Field(
+        default_factory=dict,
+        description="Diarized-speaker label → display-name mapping (e.g. 'Speaker 0' → 'Κωνσταντίνος Ψυλλίδης')",
+    )
 
     def ensure_directories(self) -> None:
         """Ensure required directories exist."""
@@ -88,8 +92,8 @@ class Config(BaseModel):
 
 
 def load_config() -> Config:
-    """Load configuration from config.json file."""
-    config_path = Path(__file__).parent / "config.json"
+    """Load configuration from config.json at the project root."""
+    config_path = Path(__file__).parent.parent / "config.json"
 
     if not config_path.exists():
         raise FileNotFoundError(

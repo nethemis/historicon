@@ -17,13 +17,23 @@ else:
     import tomli as tomllib
 
 
+_configured = False
+
+
 def configure_logfire() -> None:
     """Configure Logfire with project-specific settings.
 
-    Should be called once at application startup.
-    Uses environment variables for configuration.
+    Idempotent and respects ``LOGFIRE_AUTO_CONFIGURE`` (default true). Safe to
+    call from any module's import-time path — repeat calls are no-ops, and
+    tests can opt out by setting ``LOGFIRE_AUTO_CONFIGURE=false``.
     """
-    # Get configuration from environment
+    global _configured
+    if _configured:
+        return
+    if os.getenv("LOGFIRE_AUTO_CONFIGURE", "true").lower() != "true":
+        _configured = True
+        return
+
     service_name = os.getenv("LOGFIRE_SERVICE_NAME", "historicon-rag-agent")
     environment = os.getenv("ENVIRONMENT", "development")
 
@@ -79,7 +89,8 @@ def configure_logfire() -> None:
         print("📊 Dashboard: Run 'uv run logfire auth' to enable cloud dashboard")
         print("   Or view logs in console above ⬆️")
 
+    _configured = True
 
-# Configure Logfire for observability (skip in tests)
-if os.getenv("LOGFIRE_AUTO_CONFIGURE", "true").lower() == "true":
-    configure_logfire()
+
+# Auto-configure on import; the env-var guard lives inside configure_logfire().
+configure_logfire()

@@ -6,7 +6,6 @@ to specialized agents (retrieval agent) for information access.
 
 import json
 import os
-from datetime import datetime
 from pathlib import Path
 
 import logfire
@@ -16,38 +15,11 @@ from pydantic_ai.builtin_tools import CodeExecutionTool, WebSearchTool
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.ollama import OllamaProvider
 
-# Handle imports for both script execution and module import
-try:
-    from .logfire_setup import configure_logfire
-    from .models import RetrievalResponse
-    from .retrieval import retrieval_agent
-except ImportError:
-    from logfire_setup import configure_logfire
-    from models import RetrievalResponse
-    from retrieval import retrieval_agent
-
-# Import config from parent directory
-import sys
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import config
-
-# Configure Logfire for observability (skip in tests)
-if os.getenv("LOGFIRE_AUTO_CONFIGURE", "true").lower() == "true":
-    configure_logfire()
-
-
-def load_instructions(agent_name: str) -> str:
-    """Load agent instructions from file."""
-    instructions_dir = Path(__file__).parent.parent / "instructions"
-    instruction_file = instructions_dir / f"{agent_name}.txt"
-
-    if instruction_file.exists():
-        return instruction_file.read_text(encoding="utf-8")
-    else:
-        logfire.warn(f"Instruction file not found: {instruction_file}")
-        return "You are a helpful AI assistant for the HistoriCon Greek podcast."
-
+from agents import logfire_setup  # noqa: F401 — import-time Logfire bootstrap
+from agents._utils import load_instructions
+from agents.config import config
+from agents.models import RetrievalResponse
+from agents.retrieval import search_transcripts
 
 ollama_model = OpenAIChatModel(
     model_name="gpt-oss:120b-cloud",
@@ -141,23 +113,19 @@ async def search_documents(
         RetrievalResponse with chunks and synthesized summary
     """
     logfire.info(
-        "Delegating document search to retrieval agent",
+        "Running document search",
         query=query,
         max_results=max_results,
     )
 
-    # Delegate to retrieval agent
-    result = await retrieval_agent.run(
-        f"Search for: {query} (max {max_results} results)",
-        usage=ctx.usage,
-    )
+    response = search_transcripts(query, max_results=max_results)
 
     logfire.info(
         "Document search complete",
-        num_chunks=len(result.output.chunks),
+        num_chunks=len(response.chunks),
     )
 
-    return result.output
+    return response
 
 
 @web_orchestrator.tool
@@ -215,7 +183,8 @@ async def get_transcript_section(
             minutes = int(parts[1])
             seconds = float(parts[2])
             return hours * 3600 + minutes * 60 + seconds
-        except:
+        except (ValueError, IndexError) as e:
+            logfire.warn(f"Failed to parse timestamp {ts!r}: {e}")
             return 0.0
 
     try:
@@ -255,133 +224,6 @@ async def get_transcript_section(
     except Exception as e:
         logfire.error(f"Failed to load transcript section {episode_name}: {e}")
         return f"Error loading transcript section: {str(e)}"
-
-
-# COMMENTED OUT: get_full_transcript tool - use iterative get_transcript_section calls instead
-# This prevents token overflow from loading large paginated content
-# Strategy: Use search_documents first, then call get_transcript_section with various timestamp ranges
-
-# @web_orchestrator.tool
-# async def get_full_transcript(
-#     ctx: RunContext[None],
-#     episode_name: str,
-#     page: int = 1,
-# ) -> dict[str, any]:
-#     """
-#     Get full transcript with pagination (returns up to 10,000 tokens per call).
-#
-#     ⚠️  WARNING: Use search_documents first! Only use this for sequential reading.
-#
-#     PAGINATION GUIDE:
-#     - Returns dict with: {"content": str, "end_of_file": bool, "page": int}
-#     - If end_of_file=False, more content is available
-#     - Call with page=2, page=3, etc. to get subsequent pages
-#     - Each page contains up to 10,000 tokens (configurable)
-#
-#     Use this when:
-#     - User explicitly wants to read entire episode sequentially
-#     - Need to browse through full transcript page by page
-#
-#     DO NOT use this when:
-#     - Looking for specific information (use search_documents instead!)
-#     - Need a specific time range (use get_transcript_section instead!)
-#
-#     Args:
-#         ctx: The run context
-#         episode_name: EXACT episode filename from search_documents results (with full Greek title and .txt extension)
-#         page: Page number (starts at 1)
-#
-#     Returns:
-#         Dict with:
-#         - content: The transcript text for this page
-#         - end_of_file: True if this is the last page, False if more pages available
-#         - page: Current page number
-#         - total_pages: Total number of pages in the transcript
-#
-#     CRITICAL: Use the EXACT filename from search_documents results - do NOT abbreviate or modify it!
-#     """
-#     # Check context size before adding more content
-#     is_over_limit, current_tokens = check_context_size(ctx)
-#     if is_over_limit:
-#         return {
-#             "content": (
-#                 f"⚠️ WARNING: Context size limit exceeded ({current_tokens} / {config.max_context_tokens} tokens).\n"
-#                 f"Cannot add more transcript content. The conversation is too long.\n\n"
-#                 f"RECOMMENDATION: Start a new conversation or use search_documents to find specific information "
-#                 f"instead of reading full transcripts page by page."
-#             ),
-#             "end_of_file": True,
-#             "page": page,
-#             "total_pages": 0,
-#             "error": "context_limit_exceeded",
-#         }
-#
-#     logfire.info(
-#         "Fetching full transcript (paginated)",
-#         episode_name=episode_name,
-#         page=page,
-#     )
-#
-#     transcripts_dir = Path(config.transcripts_dir)
-#     transcript_path = transcripts_dir / episode_name
-#
-#     try:
-#         if not transcript_path.exists():
-#             return {
-#                 "content": f"Error: Transcript '{episode_name}' not found",
-#                 "end_of_file": True,
-#                 "page": page,
-#                 "total_pages": 0,
-#             }
-#
-#         full_text = transcript_path.read_text(encoding="utf-8")
-#
-#         # Approximate token count (Greek/English mixed: ~3.5 chars per token)
-#         max_chars = config.max_transcript_tokens * 4  # Conservative estimate
-#
-#         # Calculate total pages
-#         total_chars = len(full_text)
-#         total_pages = (total_chars + max_chars - 1) // max_chars  # Ceiling division
-#
-#         # Validate page number
-#         if page < 1:
-#             page = 1
-#         if page > total_pages:
-#             return {
-#                 "content": f"Error: Page {page} exceeds total pages ({total_pages})",
-#                 "end_of_file": True,
-#                 "page": page,
-#                 "total_pages": total_pages,
-#             }
-#
-#         # Extract page content
-#         start_idx = (page - 1) * max_chars
-#         end_idx = min(page * max_chars, total_chars)
-#         content = full_text[start_idx:end_idx]
-#
-#         end_of_file = page >= total_pages
-#
-#         logfire.info(
-#             f"Retrieved transcript page {page}/{total_pages}: {episode_name}",
-#             content_length=len(content),
-#             end_of_file=end_of_file,
-#         )
-#
-#         return {
-#             "content": content,
-#             "end_of_file": end_of_file,
-#             "page": page,
-#             "total_pages": total_pages,
-#         }
-#
-#     except Exception as e:
-#         logfire.error(f"Failed to load transcript {episode_name}: {e}")
-#         return {
-#             "content": f"Error loading transcript: {str(e)}",
-#             "end_of_file": True,
-#             "page": page,
-#             "total_pages": 0,
-#         }
 
 
 @web_orchestrator.tool

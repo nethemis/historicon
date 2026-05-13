@@ -144,26 +144,9 @@ async def test_orchestrator_delegates_to_retrieval(mock_run):
 
 
 @pytest.mark.asyncio
-@patch("agents.web_orchestrator.web_orchestrator.run")
-async def test_orchestrator_can_get_full_transcript(mock_run):
-    """Test that orchestrator can retrieve full transcripts."""
-    mock_result = MagicMock()
-    mock_result.output = "Here is the full transcript for George Santos episode..."
-    mock_run.return_value = mock_result
-
-    from agents.web_orchestrator import web_orchestrator
-
-    result = await web_orchestrator.run("Get the full transcript for George_Santos.txt")
-
-    assert result.output is not None
-    assert isinstance(result.output, str)
-
-
-@pytest.mark.asyncio
-async def test_get_full_transcript_tool_exists():
+async def test_transcript_tools_exist():
     """Test that all transcript tools are properly defined."""
     from agents.web_orchestrator import (
-        get_full_transcript,
         get_transcript_section,
         search_documents,
         list_podcast_info_sections,
@@ -171,14 +154,10 @@ async def test_get_full_transcript_tool_exists():
         web_orchestrator,
     )
 
-    # Check that the tools are registered (they exist as functions)
-    assert callable(get_full_transcript)
     assert callable(get_transcript_section)
     assert callable(search_documents)
     assert callable(list_podcast_info_sections)
     assert callable(get_podcast_info_section)
-
-    # Verify agent instance exists
     assert web_orchestrator is not None
 
 

@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
+from agents.config import config
+
 
 @dataclass
 class TimestampedEntry:
@@ -199,15 +201,10 @@ def rename_speakers(entries: List[TimestampedEntry]) -> List[TimestampedEntry]:
     Returns:
         List of TimestampedEntry objects with renamed speakers
     """
-    speaker_map = {
-        "Speaker 0": "Κωνσταντίνος Ψυλλίδης",
-        "Speaker 1": "Παύλος Παυλίδης",
-        # Speakers 2+ are left as-is
-    }
+    speaker_map = config.speaker_map  # diarized labels → display names; unknown labels pass through
 
     renamed_entries = []
     for entry in entries:
-        # Rename speaker if it's in the map
         new_speaker = speaker_map.get(entry.speaker, entry.speaker)
 
         # Create new entry with renamed speaker

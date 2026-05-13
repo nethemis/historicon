@@ -8,6 +8,12 @@ venv/*
 # ChromaDB vector database (can be regenerated)
 chroma_db/*
 
+# Experimental / regenerable artifacts
+greek_whisper/
+model_comparisons/
+outputs/
+screenshots/
+
 # Python cache
 __pycache__/
 *.pyc

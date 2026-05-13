@@ -41,7 +41,7 @@ import numpy as np
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
-from config import config, get_device
+from agents.config import config, get_device
 
 # Suppress logfire warning
 os.environ.setdefault("LOGFIRE_IGNORE_NO_CONFIG", "1")
