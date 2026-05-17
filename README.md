@@ -1,71 +1,45 @@
-# HistoriCon - Greek Podcast RAG Agent
+# HistoriCon - Greek Podcast RAG
 
-RAG (Retrieval Augmented Generation) system for the **HistoriCon** Greek-Cypriot history/storytelling podcast. Downloads audio from Patreon, transcribes to Greek with speaker diarization, and enables AI-powered question answering.
+RAG (Retrieval Augmented Generation) system for the **HistoriCon** Greek-Cypriot history/storytelling podcast. Downloads audio from Patreon, transcribes to Greek with speaker diarization, and enables AI-powered question answering via a **FastMCP server** with **OpenWebUI** as the chat interface.
 
 ## 🎙️ Project Overview
 
-HistoriCon is a multi-agent AI system that:
+HistoriCon is a RAG system that:
 1. **Downloads** podcast episodes from Patreon RSS feeds
 2. **Transcribes** Greek audio with speaker diarization using Deepgram
-3. **Indexes** transcripts for semantic search
-4. **Answers** questions about podcast content using RAG
+3. **Indexes** transcripts for semantic search (ChromaDB + sentence-transformers)
+4. **Exposes** retrieval tools over the MCP protocol (FastMCP, streamable-http)
+5. **Serves** a multi-user chat UI via OpenWebUI (Docker), using any Ollama or OpenAI-compatible model for synthesis
 
 ## 🏗️ Architecture
 
 ### Data Pipeline
 ```
-Patreon RSS → Audio Files → Deepgram → Greek Transcripts → Vector DB → AI Agents
+Patreon RSS → Audio Files → Deepgram → Greek Transcripts → Vector DB → MCP Tools → OpenWebUI
 ```
 
-### Multi-Agent System
-- **Web Orchestrator** - Main entry point, handles user queries
-- **Retrieval Agent** - Searches transcripts and returns relevant chunks
-- *(Future)* Memory Agent - Manages conversation context
+### System Components
+- **MCP Server** (`agents/mcp_server.py`) — FastMCP server on `:8001`, exposes 4 retrieval tools
+- **OpenWebUI** — Docker-based chat UI on `:3000`, connects to MCP server and any Ollama model
+- **Retrieval** (`agents/retrieval.py`) — ChromaDB semantic search + CrossEncoder reranking
+- **Guardrails** (`agents/guardrails.py`) — On-topic BART classifier (blocks non-history queries)
+
+### MCP Tools
+| Tool | Description |
+|------|-------------|
+| `search_documents` | Semantic search across all podcast transcripts (with on-topic filtering) |
+| `get_transcript_section` | Retrieve a time-range slice from a specific episode |
+| `list_podcast_info_sections` | List available metadata sections from `podcast_info.json` |
+| `get_podcast_info_section` | Get a specific metadata section |
 
 ## 🚀 Quick Start
 
-### Step 1: Choose Your AI Model
+### Prerequisites
+- **Docker** — for OpenWebUI
+- **Ollama** — for local LLM inference ([ollama.com/download](https://ollama.com/download))
+- Pull at least one model: `ollama pull qwen3:8b`
 
-You have two options for running the RAG agent:
-
-#### Option A: Ollama (Free, Slower)
-Ollama provides free access to open-source models. Models run locally or via their cloud API.
-
-**1. Install Ollama:**
-- Download from [https://ollama.com/download](https://ollama.com/download)
-- Follow installation instructions for your platform
-
-**2. Pull the models:**
-```bash
-# Pull both models used by the agent
-ollama pull gpt-oss:120b-cloud
-ollama pull minimax-m2.5:cloud
-ollama pull qwen3:8b
-```
-
-**3. Get Ollama Cloud API Key (Required, but Free!):**
-- Visit [https://ollama.com](https://ollama.com) and create a free account
-- Generate an API key from your dashboard (no cost)
-- Set the environment variable:
-```bash
-export OLLAMA_API_KEY="your-ollama-api-key"
-```
-
-#### Option B: Claude (Paid, Faster, More Capable)
-Anthropic's Claude Sonnet 4.5 provides superior reasoning and speed.
-
-**1. Get an API key:**
-- Visit [https://console.anthropic.com](https://console.anthropic.com)
-- Create an account and generate an API key
-
-**2. Set the environment variable:**
-```bash
-export ANTHROPIC_API_KEY="your-anthropic-api-key"
-```
-
----
-
-### Step 2: Install Dependencies
+### Step 1: Install Dependencies
 
 **1. Install `uv` (fast Python package manager):**
 ```bash
@@ -110,21 +84,39 @@ This will:
 
 ---
 
-### Step 4: Run the RAG Agent
+### Step 4: Start the MCP Server
 
 ```bash
-# Start the web server (runs on http://localhost:8001)
-uv run python agents/web_orchestrator.py
+# Start the FastMCP server (runs on http://localhost:8001/mcp)
+uv run python agents/mcp_server.py
 ```
 
-The web interface will be available at `http://localhost:8001` where you can:
-- Ask questions about podcast episodes
-- Search through transcripts
-- Get episode information
+The server exposes 4 retrieval tools over MCP streamable-http at `http://localhost:8001/mcp`.
 
 ---
 
-### Step 5: (Optional) Set Up Podcast Pipeline
+### Step 5: Start OpenWebUI
+
+```bash
+# Start OpenWebUI in Docker (runs on http://localhost:3000)
+docker compose up -d
+```
+
+OpenWebUI is pre-configured via `docker-compose.yml` to:
+- Connect to Ollama on the host machine (`http://host.docker.internal:11434`)
+- Connect to the HistoriCon MCP server (`http://host.docker.internal:8001/mcp`)
+
+**First launch only:** The first account created becomes the admin.
+
+Set the system prompt in OpenWebUI (Admin → Settings → System Prompt) using the template in `openwebui/system_prompt.md`.
+
+> **Note:** `TOOL_SERVER_CONNECTIONS` only seeds the database on first launch. If OpenWebUI was previously started without it, go to Admin → Settings → Tool Servers and add the MCP server manually with URL `http://host.docker.internal:8001/mcp`.
+
+> **Security:** Change `WEBUI_SECRET_KEY` in `docker-compose.yml` to a random value before sharing access: `openssl rand -hex 32`
+
+---
+
+### Step 6: (Optional) Set Up Podcast Pipeline
 
 If you want to download and transcribe new podcast episodes:
 
@@ -153,17 +145,15 @@ uv run python scripts/create_embeddings.py
 
 ### Environment Variables Reference
 
-**For AI Models:**
-- `ANTHROPIC_API_KEY` - Claude API key (if using Claude)
-- `OLLAMA_API_KEY` - Ollama Cloud API key (optional, for cloud models)
-
 **For Podcast Pipeline:**
-- `DEEPGRAM_API_KEY` - For Greek transcription (see Quick Start Step 5)
+- `DEEPGRAM_API_KEY` - For Greek transcription (see Quick Start Step 6)
 
 **Optional (Observability):**
 - `LOGFIRE_TOKEN` - For tracking agent performance
 - `LOGFIRE_SERVICE_NAME` - Service name in logs (default: "historicon-rag-agent")
 - `ENVIRONMENT` - Environment name (default: "development")
+
+**No LLM API key required** — the MCP server does not call any LLM. The model used for synthesis lives in OpenWebUI (Ollama or any OpenAI-compatible endpoint).
 
 ## ⚙️ Configuration
 
@@ -285,20 +275,27 @@ Changes take effect immediately on next agent run (no reindexing needed for cont
 
 ```
 historicon/
-├── agents/                          # Multi-agent RAG system
+├── agents/                          # RAG system
 │   ├── __init__.py                  # Package exports
-│   ├── models.py                    # Pydantic models
+│   ├── config.py                    # Pydantic config loader (config.json)
+│   ├── models.py                    # Shared Pydantic types
+│   ├── guardrails.py                # On-topic BART classifier
 │   ├── logfire_setup.py             # Observability config
-│   ├── retrieval.py                 # Retrieval agent (dummy)
-│   ├── web_orchestrator.py          # Main orchestrator
-│   ├── example_usage.py             # Usage examples
-│   └── README.md                    # Agent system docs
-├── instructions/                    # Agent system prompts
-│   ├── web_orchestrator.txt
+│   ├── mcp_server.py                # FastMCP server (4 tools, port 8001)
+│   ├── retrieval.py                 # Semantic search (ChromaDB + CrossEncoder)
+│   └── _utils.py                    # Shared helpers
+├── openwebui/                       # OpenWebUI setup docs
+│   ├── system_prompt.md             # HistoriCon assistant system prompt
+│   └── README.md                    # OpenWebUI setup guide
+├── docker-compose.yml               # OpenWebUI container config
+├── instructions/                    # (Legacy) agent system prompts
 │   └── retrieval.txt
-├── tests/                           # Pytests
+├── tests/                           # Pytest suite (51 tests)
+│   ├── test_guardrails.py
 │   ├── test_retrieval.py
-│   └── test_web_orchestrator.py
+│   ├── test_mcp_server.py
+│   ├── test_create_embeddings.py
+│   └── test_preprocess_transcripts.py
 ├── scripts/                         # Setup pipeline scripts
 │   ├── download_patreon.py          # Patreon RSS downloader
 │   ├── transcribe_deepgram.py       # Deepgram transcription
@@ -372,64 +369,43 @@ uv run pytest tests/test_retrieval.py
 - **Output:** `transcripts/*.txt` with full text + timestamped sections
 - **Processing:** Transcripts are then preprocessed (speakers combined, headers removed) and stored in `transcripts_processed/`
 
-## 🤖 Agent System
+## 🤖 MCP Server
 
-### Architecture
-
-The system uses a **multi-agent architecture** with specialized agents:
-
-- **Web Orchestrator** - Main entry point, delegates to specialized tools
-- **Retrieval Agent** - Searches indexed transcripts using ChromaDB vector store
-- **RAG Pipeline** - Semantic search with reranking for accurate results
+The MCP server (`agents/mcp_server.py`) exposes podcast retrieval as tools via the FastMCP streamable-http protocol. There is **no LLM in the server** — it returns raw data (search results, transcript text, metadata). The model selected in OpenWebUI does the synthesis.
 
 ### Features
 
-✅ **Fully Implemented:**
+✅ **Implemented:**
 - Multilingual embeddings (supports Greek)
 - ChromaDB vector database with semantic search
 - Speaker-aware semantic chunking
-- Reranking for improved relevance
-- Multiple search tools (semantic search, time-range queries, full transcripts)
+- CrossEncoder reranking for improved relevance
+- On-topic filtering via BART NLI classifier (blocks non-history queries)
 - Podcast metadata access via `podcast_info.json`
 
-### API Usage
+### MCP Endpoint
 
-```python
-from agents import web_orchestrator, retrieval_agent
-
-# Query the orchestrator
-result = await web_orchestrator.run("Πες μου για τον Γ. Κοσκωτά")
-print(result.output)
-
-# Direct retrieval query
-retrieval_result = await retrieval_agent.run(
-    "Search for: Κοσκωτάς (max 5 results)"
-)
-print(retrieval_result.output.summary)
+```
+http://localhost:8001/mcp   (streamable-http transport)
 ```
 
-### Web API
-
+List available tools:
 ```bash
-# Start server on port 8001
-uv run python agents/web_orchestrator.py
-
-# Query via HTTP
-curl -X POST http://localhost:8001/run \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Tell me about George Santos"}'
+uv run python -c "import asyncio; from agents.mcp_server import mcp; tools = asyncio.run(mcp.list_tools()); [print(t.name) for t in tools]"
 ```
 
 ## 📚 Tech Stack
 
 - **Python 3.12** with `uv` for fast package management
-- **Pydantic & Pydantic AI** - Type-safe data models and AI agents
-- **Anthropic Claude Sonnet 4.5** - Advanced reasoning for orchestration
-- **Ollama** - Free open-source models (GPT-OSS, MiniMax)
+- **FastMCP 3.0+** - MCP server (streamable-http transport)
+- **OpenWebUI** - Multi-user chat UI (Docker, port 3000)
+- **Ollama** - Local LLM inference (any model, runs on host)
+- **Pydantic** - Type-safe data models
 - **Deepgram Nova-3** - Greek speech-to-text transcription
 - **ChromaDB** - Vector database for semantic search
-- **sentence-transformers** - Multilingual embeddings
-- **Logfire** - AI observability and monitoring
+- **sentence-transformers** - Multilingual embeddings + CrossEncoder reranking
+- **transformers (BART)** - On-topic classification
+- **Logfire** - Observability and monitoring
 - **feedparser, requests, pydub** - Data processing utilities
 
 ## 🐛 Common Issues

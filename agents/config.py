@@ -80,6 +80,10 @@ class Config(BaseModel):
     deepgram_language: str = Field(
         default="el", description="Language code for transcription (el=Greek)"
     )
+    eval_model: str = Field(
+        default="anthropic:claude-haiku-4-5",
+        description="Pydantic-AI model string used for eval runs (cheap, fast model)",
+    )
     speaker_map: dict[str, str] = Field(
         default_factory=dict,
         description="Diarized-speaker label → display-name mapping (e.g. 'Speaker 0' → 'Κωνσταντίνος Ψυλλίδης')",

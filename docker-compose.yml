@@ -1,0 +1,28 @@
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: historicon-openwebui
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui:/app/backend/data
+    environment:
+      # Ollama: point to the host machine (Docker can't use localhost for host services)
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      # Pre-configure the HistoriCon MCP server so it appears automatically on first launch
+      # type=mcp, url points to the MCP server running on the host, config.enable=true
+      - TOOL_SERVER_CONNECTIONS=[{"type":"mcp","url":"http://host.docker.internal:8001/mcp","auth_type":"none","info":{"id":"historicon","name":"HistoriCon"},"config":{"enable":true}}]
+      # Stable secret key — prevents users being logged out on container restart
+      # Change this to a random value: openssl rand -hex 32
+      - WEBUI_SECRET_KEY=change-me-use-openssl-rand-hex-32
+      # Auth: require login, first signup becomes admin
+      - WEBUI_AUTH=true
+    extra_hosts:
+      # Allows the container to reach services running on the host machine
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  open-webui:
+    driver: local
+
