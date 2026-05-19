@@ -5,7 +5,6 @@ All external dependencies are mocked to avoid real API calls,
 model loads, and file-system access.
 
 Mocking strategy:
-  - agents.guardrails.get_classifier     → avoids loading BART (~1.6 GB)
   - agents.retrieval.get_retriever       → avoids ChromaDB + sentence-transformers
   - podcast_info.json / transcript files → patched via tmp_path or monkeypatch
 """
@@ -20,28 +19,6 @@ import pytest
 from agents.models import RetrievalChunk, RetrievalResponse
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
-
-
-def _make_on_topic_classifier(is_on_topic: bool = True):
-    """Return a mock classifier that passes or blocks queries."""
-    mock = MagicMock()
-    if is_on_topic:
-        mock.return_value = {
-            "labels": [
-                "a question about historical events or historical figures (not food or sports), or the HistoriCon podcast",
-                "a cooking recipe, sports result, weather forecast, or programming task",
-            ],
-            "scores": [0.9, 0.1],
-        }
-    else:
-        mock.return_value = {
-            "labels": [
-                "a cooking recipe, sports result, weather forecast, or programming task",
-                "a question about historical events or historical figures (not food or sports), or the HistoriCon podcast",
-            ],
-            "scores": [0.8, 0.2],
-        }
-    return mock
 
 
 def _make_retrieval_response(num_chunks: int = 2) -> RetrievalResponse:
@@ -66,18 +43,14 @@ def _make_retrieval_response(num_chunks: int = 2) -> RetrievalResponse:
 
 
 @pytest.mark.asyncio
-async def test_search_documents_on_topic_returns_chunks():
-    """search_documents returns retrieval results for on-topic queries."""
+async def test_search_documents_returns_chunks():
+    """search_documents returns retrieval results."""
     from agents import mcp_server
 
-    mock_classifier = _make_on_topic_classifier(is_on_topic=True)
     mock_response = _make_retrieval_response(num_chunks=3)
 
-    with patch("agents.guardrails.get_classifier", return_value=mock_classifier):
-        with patch("agents.mcp_server.search_transcripts", return_value=mock_response):
-            result = await mcp_server.search_documents(
-                "ιστορία της Κύπρου", max_results=3
-            )
+    with patch("agents.mcp_server.search_transcripts", return_value=mock_response):
+        result = await mcp_server.search_documents("ιστορία της Κύπρου", max_results=3)
 
     assert result["total_results"] == 3
     assert len(result["chunks"]) == 3
@@ -86,57 +59,18 @@ async def test_search_documents_on_topic_returns_chunks():
 
 
 @pytest.mark.asyncio
-async def test_search_documents_off_topic_returns_error():
-    """search_documents returns an error dict for off-topic queries without calling retrieval."""
-    from agents import mcp_server
-
-    mock_classifier = _make_on_topic_classifier(is_on_topic=False)
-
-    with patch("agents.guardrails.get_classifier", return_value=mock_classifier):
-        with patch("agents.mcp_server.search_transcripts") as mock_retrieval:
-            result = await mcp_server.search_documents("how do I make pasta carbonara?")
-
-    mock_retrieval.assert_not_called()
-    assert "error" in result
-    assert result["total_results"] == 0
-    assert len(result["chunks"]) == 0
-    assert "HistoriCon" in result["error"] or "ιστορία" in result["error"]
-
-
-@pytest.mark.asyncio
 async def test_search_documents_default_max_results():
     """search_documents defaults to max_results=5."""
     from agents import mcp_server
 
-    mock_classifier = _make_on_topic_classifier(is_on_topic=True)
     mock_response = _make_retrieval_response(num_chunks=5)
 
-    with patch("agents.guardrails.get_classifier", return_value=mock_classifier):
-        with patch(
-            "agents.mcp_server.search_transcripts", return_value=mock_response
-        ) as mock_r:
-            await mcp_server.search_documents("Greek Revolution 1821")
+    with patch(
+        "agents.mcp_server.search_transcripts", return_value=mock_response
+    ) as mock_r:
+        await mcp_server.search_documents("Greek Revolution 1821")
 
     mock_r.assert_called_once_with("Greek Revolution 1821", max_results=5)
-
-
-@pytest.mark.asyncio
-async def test_search_documents_classifier_error_fails_open():
-    """When the classifier errors, search_documents proceeds (fail-open behaviour)."""
-    from agents import mcp_server
-
-    def _exploding_classifier(query, labels, multi_label=False):
-        raise RuntimeError("Model load failed")
-
-    mock_response = _make_retrieval_response(num_chunks=1)
-
-    with patch("agents.guardrails.get_classifier", return_value=_exploding_classifier):
-        with patch("agents.mcp_server.search_transcripts", return_value=mock_response):
-            result = await mcp_server.search_documents("What happened in 1821?")
-
-    # Fail-open: retrieval proceeds even when classifier errors
-    assert result["total_results"] == 1
-    assert "error" not in result
 
 
 # ─── get_transcript_section ───────────────────────────────────────────────────

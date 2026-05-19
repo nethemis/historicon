@@ -11,12 +11,33 @@ services:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       # Pre-configure the HistoriCon MCP server so it appears automatically on first launch
       # type=mcp, url points to the MCP server running on the host, config.enable=true
-      - TOOL_SERVER_CONNECTIONS=[{"type":"mcp","url":"http://host.docker.internal:8001/mcp","auth_type":"none","info":{"id":"historicon","name":"HistoriCon"},"config":{"enable":true}}]
+      - TOOL_SERVER_CONNECTIONS=[{"type":"mcp","url":"http://host.docker.internal:8001/mcp","auth_type":"none","info":{"id":"historicon","name":"HistoriCon"},"config":{"enable":true,"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]}}]
       # Stable secret key — prevents users being logged out on container restart
       # Change this to a random value: openssl rand -hex 32
       - WEBUI_SECRET_KEY=change-me-use-openssl-rand-hex-32
       # Auth: require login, first signup becomes admin
       - WEBUI_AUTH=true
+      # Google OAuth — users sign up/in with their Google account only
+      # Get credentials at: console.cloud.google.com → APIs & Services → Credentials
+      # Redirect URI to register in Google: http://<your-domain>/oauth/google/callback
+      - GOOGLE_CLIENT_ID
+      - GOOGLE_CLIENT_SECRET
+      - ENABLE_OAUTH_SIGNUP=true
+      - ENABLE_LOGIN_FORM=false
+      # Link Google login to existing accounts with the same email address
+      - OAUTH_MERGE_ACCOUNTS_BY_EMAIL=true
+      # New Google sign-ups land as "pending" until admin approves them
+      # Admin approves via: Admin Panel → Users → click user → set role to "user"
+      - DEFAULT_USER_ROLE=pending
+      # Force env vars to always win over persisted DB config.
+      # Without this, OpenWebUI ignores env var changes after first launch.
+      - ENABLE_PERSISTENT_CONFIG=false
+      # Default system prompt applied to all chats (newlines encoded as \n)
+      - "DEFAULT_SYSTEM_PROMPT=You are the HistoriCon assistant - a specialist on the HistoriCon Greek-Cypriot history and storytelling podcast. You have no general-purpose knowledge and cannot answer questions outside this domain.\n\nYour role: Answer questions about the podcast's episodes, history, and speakers using ONLY the information returned by your tools. Never add facts from your own training data.\n\nScope - HARD LIMIT: Only answer questions directly related to Greek or Cypriot history, the HistoriCon podcast (episodes, hosts, guests, format), or topics explicitly discussed in the podcast transcripts. For ANY other question respond only with: Αυτή η ερώτηση δεν σχετίζεται με το HistoriCon. Μπορώ να βοηθήσω μόνο με ερωτήσεις για την ελληνική ή κυπριακή ιστορία και τα επεισόδια του podcast. / This question is outside the scope of HistoriCon. I can only help with questions about Greek or Cypriot history and the podcast episodes. Do NOT answer off-topic questions even partially.\n\nTools: Always call search_documents before answering any question about episode content. Never fill gaps with outside knowledge.\n\nLanguage: Respond in the same language the user uses."
+      # Enable the Direct Connections feature in the chat UI (disabled by default)
+      - ENABLE_DIRECT_CONNECTIONS=true
+      # Allow regular users to use direct tool servers (MCP) — off by default
+      - USER_PERMISSIONS_FEATURES_DIRECT_TOOL_SERVERS=true
     extra_hosts:
       # Allows the container to reach services running on the host machine
       - "host.docker.internal:host-gateway"

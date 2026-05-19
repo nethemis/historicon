@@ -19,15 +19,16 @@ Patreon RSS → Audio Files → Deepgram → Greek Transcripts → Vector DB →
 ```
 
 ### System Components
-- **MCP Server** (`agents/mcp_server.py`) — FastMCP server on `:8001`, exposes 4 retrieval tools
-- **OpenWebUI** — Docker-based chat UI on `:3000`, connects to MCP server and any Ollama model
+- **MCP Server** (`agents/mcp_server.py`) — FastMCP server on `:8001`, exposes 4 retrieval tools. No guardrails.
+- **Guardrails Server** (`agents/guardrails_server.py`) — Standalone HTTP server on `:8002`, exposes `POST /check-topic` for the OpenWebUI filter
+- **OpenWebUI** — Docker-based chat UI on `:3000`, connects to Ollama model and MCP server
 - **Retrieval** (`agents/retrieval.py`) — ChromaDB semantic search + CrossEncoder reranking
-- **Guardrails** (`agents/guardrails.py`) — On-topic BART classifier (blocks non-history queries)
+- **Guardrails** (`agents/guardrails.py`) — On-topic BART classifier; used by the guardrails server and evals
 
 ### MCP Tools
 | Tool | Description |
 |------|-------------|
-| `search_documents` | Semantic search across all podcast transcripts (with on-topic filtering) |
+| `search_documents` | Semantic search across all podcast transcripts |
 | `get_transcript_section` | Retrieve a time-range slice from a specific episode |
 | `list_podcast_info_sections` | List available metadata sections from `podcast_info.json` |
 | `get_podcast_info_section` | Get a specific metadata section |
@@ -84,14 +85,18 @@ This will:
 
 ---
 
-### Step 4: Start the MCP Server
+### Step 4: Start the Servers
 
 ```bash
-# Start the FastMCP server (runs on http://localhost:8001/mcp)
+# Start the FastMCP retrieval server (http://localhost:8001/mcp)
 uv run python agents/mcp_server.py
+
+# In a second terminal: start the guardrails server (http://localhost:8002/check-topic)
+uv run python agents/guardrails_server.py
 ```
 
-The server exposes 4 retrieval tools over MCP streamable-http at `http://localhost:8001/mcp`.
+The MCP server exposes 4 retrieval tools at `http://localhost:8001/mcp`.
+The guardrails server classifies user messages for the OpenWebUI filter at `http://localhost:8002/check-topic`.
 
 ---
 
@@ -112,7 +117,7 @@ Set the system prompt in OpenWebUI (Admin → Settings → System Prompt) using 
 
 > **Note:** `TOOL_SERVER_CONNECTIONS` only seeds the database on first launch. If OpenWebUI was previously started without it, go to Admin → Settings → Tool Servers and add the MCP server manually with URL `http://host.docker.internal:8001/mcp`.
 
-> **Security:** Change `WEBUI_SECRET_KEY` in `docker-compose.yml` to a random value before sharing access: `openssl rand -hex 32`
+> **Security:** Change `WEBUI_SECRET_KEY` in `docker-compose.yml` to a random value before sharing access: `openssl rand -hex 32`. Google OAuth credentials (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`) are read from the shell environment — run `secrets` before starting Docker.
 
 ---
 
@@ -145,8 +150,15 @@ uv run python scripts/create_embeddings.py
 
 ### Environment Variables Reference
 
+**For Google OAuth (OpenWebUI login):**
+- `GOOGLE_CLIENT_ID` - Google OAuth client ID (load via `secrets` before `docker compose up`)
+- `GOOGLE_CLIENT_SECRET` - Google OAuth client secret (load via `secrets` before `docker compose up`)
+
+Both are read from the host shell environment by `docker-compose.yml` — they are **not hardcoded** in the file. Run `secrets && docker compose up -d` to ensure they are available.
+
 **For Podcast Pipeline:**
 - `DEEPGRAM_API_KEY` - For Greek transcription (see Quick Start Step 6)
+- `PATREON_RSS_TOKEN` - For downloading new episodes from Patreon RSS
 
 **Optional (Observability):**
 - `LOGFIRE_TOKEN` - For tracking agent performance
@@ -280,6 +292,7 @@ historicon/
 │   ├── config.py                    # Pydantic config loader (config.json)
 │   ├── models.py                    # Shared Pydantic types
 │   ├── guardrails.py                # On-topic BART classifier
+│   ├── guardrails_server.py         # Standalone guardrails HTTP server (port 8002)
 │   ├── logfire_setup.py             # Observability config
 │   ├── mcp_server.py                # FastMCP server (4 tools, port 8001)
 │   ├── retrieval.py                 # Semantic search (ChromaDB + CrossEncoder)
@@ -290,8 +303,9 @@ historicon/
 ├── docker-compose.yml               # OpenWebUI container config
 ├── instructions/                    # (Legacy) agent system prompts
 │   └── retrieval.txt
-├── tests/                           # Pytest suite (51 tests)
+├── tests/                           # Pytest suite (58 tests)
 │   ├── test_guardrails.py
+│   ├── test_guardrails_server.py
 │   ├── test_retrieval.py
 │   ├── test_mcp_server.py
 │   ├── test_create_embeddings.py

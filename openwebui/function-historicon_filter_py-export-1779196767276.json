@@ -1,0 +1,22 @@
+[
+    {
+        "id": "historicon_filter_py",
+        "user_id": "a123b7b8-db41-4e1a-bfbc-d5b351c76982",
+        "name": "historicon_filter.py",
+        "type": "filter",
+        "content": "\"\"\"\ntitle: HistoriCon On-Topic Filter\nauthor: HistoriCon\nversion: 1.1.0\ndescription: >\n  Blocks off-topic questions before any LLM call is made.\n  Calls the HistoriCon MCP server's /check-topic endpoint to classify\n  the user's last message. If off-topic, emits a polite assistant-style\n  reply via the event emitter — the user can keep chatting normally.\n\nUpload via: OpenWebUI Admin → Functions → + (new function) → paste this file.\nSet the check_topic_url Valve if your MCP server runs on a different host/port.\n\"\"\"\n\nimport requests\nfrom pydantic import BaseModel\n\n_DEFAULT_REFUSAL = (\n    \"Αυτή η ερώτηση δεν σχετίζεται με το HistoriCon. \"\n    \"Μπορώ να βοηθήσω μόνο με ερωτήσεις για την ελληνική ή κυπριακή ιστορία \"\n    \"και τα επεισόδια του podcast. / \"\n    \"This question is outside the scope of HistoriCon. \"\n    \"I can only help with questions about Greek or Cypriot history and the podcast episodes.\"\n)\n\n\nclass Filter:\n    class Valves(BaseModel):\n        # MCP server is on the host machine; Docker resolves host.docker.internal\n        check_topic_url: str = \"http://host.docker.internal:8001/check-topic\"\n        # Seconds to wait for the guardrail endpoint before failing open\n        timeout_seconds: int = 30\n\n    def __init__(self):\n        self.valves = self.Valves()\n\n    async def inlet(\n        self,\n        body: dict,\n        __event_emitter__=None,\n        __user__: dict = {},\n    ) -> dict:\n        \"\"\"Run before the LLM. Emits a polite refusal for off-topic queries.\"\"\"\n        messages = body.get(\"messages\", [])\n        # Find the most recent user message\n        last_user_msg = next(\n            (m[\"content\"] for m in reversed(messages) if m.get(\"role\") == \"user\"),\n            \"\",\n        )\n\n        if not last_user_msg:\n            return body\n\n        try:\n            resp = requests.post(\n                self.valves.check_topic_url,\n                json={\"query\": last_user_msg},\n                timeout=self.valves.timeout_seconds,\n            )\n            resp.raise_for_status()\n            data = resp.json()\n\n            if not data.get(\"on_topic\", True):\n                refusal = data.get(\"message\", _DEFAULT_REFUSAL)\n\n                if __event_emitter__:\n                    # Emit as a proper assistant message — chat continues normally\n                    await __event_emitter__(\n                        {\"type\": \"message\", \"data\": {\"content\": refusal}}\n                    )\n                    await __event_emitter__(\n                        {\"type\": \"status\", \"data\": {\"done\": True, \"description\": \"\"}}\n                    )\n                    # Return an empty messages list so the LLM is never called\n                    body[\"messages\"] = []\n                    return body\n                else:\n                    # Fallback: event emitter unavailable\n                    raise Exception(refusal)\n\n        except requests.RequestException:\n            # MCP server unreachable — fail open so legitimate users are not blocked\n            pass\n\n        return body\n",
+        "meta": {
+            "description": "historicon_filter",
+            "manifest": {
+                "title": "HistoriCon On-Topic Filter",
+                "author": "HistoriCon",
+                "version": "1.1.0",
+                "description": ">"
+            }
+        },
+        "is_active": true,
+        "is_global": true,
+        "updated_at": 1779195813,
+        "created_at": 1779195427
+    }
+]

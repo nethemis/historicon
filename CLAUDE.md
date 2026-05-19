@@ -13,9 +13,10 @@ Dependencies are managed with `uv`. Python 3.12 (pinned `>=3.12,<3.13` in pyproj
 ```bash
 uv pip install -e ".[dev]"          # install incl. dev deps
 
-uv run python agents/mcp_server.py       # start MCP server on :8001
-docker compose up -d                      # start OpenWebUI on :3000
-uv run ./run_pipeline.py                  # full setup pipeline
+uv run python agents/mcp_server.py          # start MCP server on :8001
+uv run python agents/guardrails_server.py   # start guardrails server on :8002
+docker compose up -d                         # start OpenWebUI on :3000
+uv run ./run_pipeline.py                     # full setup pipeline
 
 # Individual pipeline stages (in order):
 uv run python scripts/download_patreon.py
@@ -36,8 +37,9 @@ Required env vars: `DEEPGRAM_API_KEY` (transcription pipeline only). The MCP ser
 **Data flow:** Patreon RSS → `inputs/` (audio, gitignored) → `transcripts/` (raw Deepgram output with timestamps) → `transcripts_processed/` (cleaned, speaker-merged, committed) → `chroma_db/` (vector index, gitignored) → agents.
 
 **Agents** (`agents/`):
-- `mcp_server.py` — FastMCP server on `:8001` (streamable-http). Exposes 4 tools: `search_documents` (on-topic filter + ChromaDB search), `get_transcript_section` (time-range slice), `list_podcast_info_sections`, `get_podcast_info_section`. No LLM inside — returns raw retrieval data for OpenWebUI's chosen model to synthesise.
-- `guardrails.py` — On-topic BART classifier only. `get_classifier()` (lru_cache singleton, loads `facebook/bart-large-mnli` lazily), `check_on_topic(query, classifier=None) -> (bool, str)`. Fails open on errors. Anti-fabrication code was removed; replaced by strict system prompt in OpenWebUI (`openwebui/system_prompt.md`).
+- `mcp_server.py` — FastMCP server on `:8001` (streamable-http). Exposes 4 tools: `search_documents` (ChromaDB semantic search), `get_transcript_section` (time-range slice), `list_podcast_info_sections`, `get_podcast_info_section`. No LLM inside, no guardrails — returns raw retrieval data for OpenWebUI's chosen model to synthesise.
+- `guardrails_server.py` — Standalone Starlette/uvicorn HTTP server on `:8002`. Exposes `POST /check-topic` used by the OpenWebUI filter (`openwebui/historicon_filter.py`) to classify user messages before any LLM call. Wraps `check_on_topic` from `guardrails.py` and runs the classifier in a thread pool. Fails open on any error.
+- `guardrails.py` — On-topic BART classifier only. `get_classifier()` (lru_cache singleton, loads `facebook/bart-large-mnli` lazily), `check_on_topic(query, classifier=None) -> (bool, str)`. Fails open on errors. Used by `guardrails_server.py` and `evals/eval_guardrails.py`.
 - `retrieval.py` — Plain `search_transcripts(query, max_results)` function backed by `ChromaRetriever`: ChromaDB returns `retrieval_top_k` candidates (sentence-transformers multilingual embeddings), then a CrossEncoder (`reranking_model`) reranks them; final scores are sigmoid-squashed into `[0, 1]` for `RetrievalChunk.score`. No LLM, no tool-calling.
 - `models.py` — Pydantic types shared between agents (`RetrievalChunk`, `RetrievalResponse`).
 - `_utils.py` — `load_instructions()` shared loader for `instructions/{agent_name}.txt` prompts.
@@ -55,6 +57,7 @@ Required env vars: `DEEPGRAM_API_KEY` (transcription pipeline only). The MCP ser
 - `OLLAMA_BASE_URL=http://host.docker.internal:11434` — points to Ollama on the host machine. **Do not set this to empty string** — that bypasses the `/ollama` Dockerfile default which auto-resolves to `host.docker.internal`.
 - `TOOL_SERVER_CONNECTIONS` — JSON array pre-seeding the HistoriCon MCP server. Seeds the OpenWebUI database **on first launch only**. If the DB already exists without it, add manually in Admin → Settings → Tool Servers.
 - `WEBUI_SECRET_KEY` — change to a random value (`openssl rand -hex 32`) before sharing access.
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — **not hardcoded**. Must be present in the shell environment before running `docker compose up`. Load them via the `secrets` function in `~/.zshrc` (reads from 1Password). Both are stored in 1Password under `op://Employee/GOOGLE_CLIENT_ID/credential` and `op://Employee/GOOGLE_CLIENT_SECRET/credential`. If these vars are missing when Docker starts, Google OAuth will silently fail.
 
 System prompt template lives at `openwebui/system_prompt.md`.
 
@@ -76,7 +79,7 @@ System prompt template lives at `openwebui/system_prompt.md`.
 - CrossEncoder logits are unbounded; `RetrievalChunk.score` is sigmoid-normalized into `[0, 1]`. Don't compare scores across different rerankers or models — the sigmoid mapping isn't calibrated.
 - `chroma_db/` and `inputs/` are gitignored; `transcripts_processed/` is committed (it's the source of truth for embeddings).
 - Several scripts (`scripts/vad_transcribe.py`, `scripts/llm_correct.py`, `scripts/model_comparison.py`) and dirs (`greek_whisper/`, `model_comparisons/`) are experimental Whisper/LoRA/correction work, untracked and not wired into `run_pipeline.py`.
-- `check_on_topic` loads `facebook/bart-large-mnli` (~1.6GB) lazily via `get_classifier()` (`@lru_cache(maxsize=1)`) on the first call in the MCP server. Tests must mock `agents.guardrails.get_classifier` to avoid triggering this download. Call `get_classifier.cache_clear()` in tests that patch the underlying loader.
+- `check_on_topic` loads `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli` (~280 MB) lazily via `get_classifier()` (`@lru_cache(maxsize=1)`) on the first call to the guardrails server. Tests must mock `agents.guardrails.get_classifier` to avoid triggering this download. Call `get_classifier.cache_clear()` in tests that patch the underlying loader.
 - `_PODCAST_INFO_PATH` in `mcp_server.py` is a module-level `Path` — patch it directly in tests: `patch("agents.mcp_server._PODCAST_INFO_PATH", tmp_path / "info.json")`.
 - FastMCP tool listing API: use `asyncio.run(mcp.list_tools())` returning `FunctionTool` objects with `.name`. `mcp._tool_manager.tools` does not exist.
 - `TOOL_SERVER_CONNECTIONS` in OpenWebUI uses `PersistentConfig` — the env var value is saved to the database on first launch and subsequent env changes are ignored unless `RESET_CONFIG_ON_START=true` or the Docker volume is deleted.

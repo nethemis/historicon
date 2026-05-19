@@ -6,16 +6,11 @@ Tools:
   list_podcast_info_sections — list section keys from podcast_info.json
   get_podcast_info_section   — get content of a named section
 
-The on-topic guardrail (BART zero-shot classifier) is applied inside
-search_documents before any retrieval is performed. The classifier runs in
-a thread-pool executor to avoid blocking the async event loop.
-
 Run:
     uv run python agents/mcp_server.py
     # Listens on http://0.0.0.0:8001/mcp (streamable-http transport)
 """
 
-import asyncio
 import json
 import re
 from pathlib import Path
@@ -24,7 +19,6 @@ import logfire
 
 from agents import logfire_setup  # noqa: F401 — import-time Logfire bootstrap
 from agents.config import config
-from agents.guardrails import check_on_topic
 from agents.retrieval import search_transcripts
 from fastmcp import FastMCP
 
@@ -35,12 +29,6 @@ mcp = FastMCP("HistoriCon - Greek History Podcast")
 
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
-
-
-async def _check_topic_async(query: str) -> tuple[bool, str]:
-    """Run the blocking BART classifier in a thread pool to avoid stalling the loop."""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, check_on_topic, query)
 
 
 def _parse_timestamp(ts: str) -> float:
@@ -72,24 +60,10 @@ async def search_documents(query: str, max_results: int = 5) -> dict:
 
     Returns:
         Dict with keys: chunks, summary, query, total_results.
-        Returns an error dict if the query is off-topic.
     """
-    is_on_topic, error_msg = await _check_topic_async(query)
-    if not is_on_topic:
-        logfire.info(
-            "search_documents blocked by on-topic filter", query_preview=query[:60]
-        )
-        return {
-            "error": error_msg,
-            "chunks": [],
-            "total_results": 0,
-            "query": query,
-            "summary": error_msg,
-        }
-
     logfire.info("search_documents", query=query, max_results=max_results)
     response = search_transcripts(query, max_results=max_results)
-    logfire.info("search_documents complete", num_chunks=len(response.chunks))
+    logfire.info("search_documents complete", total_results=len(response.chunks))
     return response.model_dump()
 
 

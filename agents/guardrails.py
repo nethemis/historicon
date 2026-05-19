@@ -1,11 +1,10 @@
-"""Guardrails for the HistoriCon MCP server.
+"""Guardrails for the HistoriCon podcast.
 
-On-topic filter — zero-shot classifier (facebook/bart-large-mnli via
-transformers) that blocks queries unrelated to Greek/Cypriot history before
-any retrieval is performed.
+On-topic filter — zero-shot classifier (MoritzLaurer/mDeBERTa-v3-base-mnli-xnli
+via transformers) that blocks queries unrelated to Greek/Cypriot history.
+The model is multilingual and handles Greek and Cypriot dialect queries natively.
 
-Call check_on_topic() from tool handlers to guard free-text query parameters.
-The classifier is loaded lazily on the first real query (~1.6 GB, cached).
+The classifier is loaded lazily on the first real query (~280 MB, cached).
 
 Usage:
     is_ok, error_msg = check_on_topic(query)
@@ -22,15 +21,26 @@ import logfire
 
 # ─── Candidate labels for zero-shot classification ────────────────────────────
 
-_CANDIDATE_LABELS = [
-    "a question about historical events or historical figures (not food or sports), or the HistoriCon podcast",
-    "a cooking recipe, sports result, weather forecast, or programming task",
-]
-
-_OFF_TOPIC_LABEL = (
-    "a cooking recipe, sports result, weather forecast, or programming task"
+# Bilingual labels (English + Greek) improve accuracy for Greek and Cypriot
+# queries when using a cross-lingual NLI model.
+_ON_TOPIC_LABEL = (
+    "a question about Greek history, Cypriot history, the Byzantine Empire, "
+    "historical events or figures covered by the HistoriCon Greek-Cypriot podcast "
+    "/ ερώτηση σχετική με ελληνική ιστορία, κυπριακή ιστορία, Βυζαντινή Αυτοκρατορία "
+    "ή ιστορικά γεγονότα του podcast HistoriCon"
 )
-_OFF_TOPIC_THRESHOLD = 0.5
+_OFF_TOPIC_LABEL = (
+    "a question unrelated to Greek or Cypriot history, such as general trivia, "
+    "current events, other countries, cooking, sports, programming, or everyday tasks "
+    "/ ερώτηση άσχετη με ελληνική ή κυπριακή ιστορία, όπως γενικές γνώσεις, "
+    "επικαιρότητα, μαγειρική, αθλητισμός, προγραμματισμός ή καθημερινές εργασίες"
+)
+
+_CANDIDATE_LABELS = [_ON_TOPIC_LABEL, _OFF_TOPIC_LABEL]
+
+# Minimum confidence required before blocking a query as off-topic.
+# Only fires when off-topic wins AND exceeds this threshold — fail-open otherwise.
+_OFF_TOPIC_MIN_SCORE = 0.6
 
 _OFF_TOPIC_MSG = (
     "Η ερώτησή σου δεν σχετίζεται με το podcast HistoriCon. "
@@ -41,11 +51,17 @@ _OFF_TOPIC_MSG = (
 
 
 def _load_classifier():
-    """Load the zero-shot classification pipeline (~1.6 GB, called once)."""
+    """Load the zero-shot classification pipeline (~280 MB, called once)."""
     from transformers import pipeline  # type: ignore[import]
 
-    logfire.info("Loading zero-shot classification model (facebook/bart-large-mnli)")
-    return pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+    logfire.info(
+        "Loading zero-shot classification model "
+        "(MoritzLaurer/mDeBERTa-v3-base-mnli-xnli)"
+    )
+    return pipeline(
+        "zero-shot-classification",
+        model="MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
+    )
 
 
 @lru_cache(maxsize=1)
@@ -59,28 +75,33 @@ def check_on_topic(query: str, classifier=None) -> tuple[bool, str]:
 
     Pass a mock classifier= in tests to avoid loading the real model.
 
-    Uses multi_label=True so each candidate label gets an independent
-    entailment score rather than a normalised softmax. This prevents
-    semantically related but off-topic queries (e.g. "Who won the Champions
-    League?") from being diluted into the on-topic bucket when competing
-    against a historical-events label.
+    Uses multi_label=False (softmax over both labels) so the winning label is
+    always clear. A query is blocked only when the off-topic label wins AND
+    its score meets _OFF_TOPIC_MIN_SCORE. Anything ambiguous passes through
+    (fail-open) to avoid blocking legitimate on-topic questions.
     """
     if classifier is None:
         classifier = get_classifier()
 
     try:
-        result = classifier(query, _CANDIDATE_LABELS, multi_label=True)
-        top_label: str = result["labels"][0]
-        top_score: float = result["scores"][0]
+        result = classifier(query, _CANDIDATE_LABELS, multi_label=False)
+
+        # Build a score lookup by label name
+        scores_by_label: dict[str, float] = dict(
+            zip(result["labels"], result["scores"])
+        )
+        on_topic_score = scores_by_label.get(_ON_TOPIC_LABEL, 0.0)
+        off_topic_score = scores_by_label.get(_OFF_TOPIC_LABEL, 0.0)
 
         logfire.info(
             "On-topic classification",
             query_preview=query[:60],
-            top_label=top_label,
-            top_score=top_score,
+            on_topic_score=on_topic_score,
+            off_topic_score=off_topic_score,
         )
 
-        if top_label == _OFF_TOPIC_LABEL and top_score >= _OFF_TOPIC_THRESHOLD:
+        # Block only when off-topic wins with sufficient confidence
+        if off_topic_score > on_topic_score and off_topic_score >= _OFF_TOPIC_MIN_SCORE:
             return False, _OFF_TOPIC_MSG
 
         return True, ""
