@@ -29,6 +29,16 @@ def _make_classifier(is_on_topic: bool):
     return mock
 
 
+def _make_grounding_classifier(is_grounded: bool):
+    mock = MagicMock()
+    # Direct NLI: single-label, entailment score via multi_label=True
+    mock.return_value = {
+        "labels": ["hypothesis"],
+        "scores": [0.85 if is_grounded else 0.2],
+    }
+    return mock
+
+
 # ─── /check-topic ─────────────────────────────────────────────────────────────
 
 
@@ -103,3 +113,138 @@ def test_check_topic_classifier_error_fails_open():
 
     assert resp.status_code == 200
     assert resp.json()["on_topic"] is True
+
+
+# ─── /check-grounding ─────────────────────────────────────────────────────────
+
+
+def test_check_grounding_grounded_returns_true():
+    """/check-grounding returns grounded=true when response matches context."""
+    with patch(
+        "agents.guardrails.get_classifier",
+        return_value=_make_grounding_classifier(is_grounded=True),
+    ):
+        client = TestClient(app)
+        resp = client.post(
+            "/check-grounding",
+            json={
+                "response": "Ο Κοσκωτάς ήταν τραπεζίτης.",
+                "context_chunks": [
+                    "Ο Κοσκωτάς ήταν τραπεζίτης που κατηγορήθηκε για υπεξαίρεση."
+                ],
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["grounded"] is True
+    assert data["message"] == ""
+
+
+def test_check_grounding_not_grounded_returns_false():
+    """/check-grounding returns grounded=false with a message when not grounded."""
+    with patch(
+        "agents.guardrails.get_classifier",
+        return_value=_make_grounding_classifier(is_grounded=False),
+    ):
+        client = TestClient(app)
+        resp = client.post(
+            "/check-grounding",
+            json={
+                "response": "Ο Κοσκωτάς έγινε πρόεδρος της Ελλάδας.",
+                "context_chunks": ["Ο Κοσκωτάς ήταν τραπεζίτης."],
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["grounded"] is False
+    assert len(data["message"]) > 0
+
+
+def test_check_grounding_bad_body_fails_open():
+    """/check-grounding with malformed body returns grounded=true (fail open)."""
+    with patch("agents.guardrails.get_classifier"):
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post(
+            "/check-grounding",
+            content=b"not json",
+            headers={"content-type": "application/json"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["grounded"] is True
+
+
+def test_check_grounding_empty_response_fails_open():
+    """/check-grounding with empty response returns grounded=true without calling classifier."""
+    with patch("agents.guardrails.get_classifier") as mock_get:
+        client = TestClient(app)
+        resp = client.post(
+            "/check-grounding",
+            json={"response": "", "context_chunks": ["Some context."]},
+        )
+
+    mock_get.assert_not_called()
+    assert resp.status_code == 200
+    assert resp.json()["grounded"] is True
+
+
+def test_check_grounding_empty_chunks_fails_open():
+    """/check-grounding with no context chunks returns grounded=true without calling classifier."""
+    with patch("agents.guardrails.get_classifier") as mock_get:
+        client = TestClient(app)
+        resp = client.post(
+            "/check-grounding",
+            json={"response": "Some response.", "context_chunks": []},
+        )
+
+    mock_get.assert_not_called()
+    assert resp.status_code == 200
+    assert resp.json()["grounded"] is True
+
+
+def test_check_grounding_response_includes_unverified_sentences_field():
+    """/check-grounding always includes unverified_sentences in the response."""
+    with patch(
+        "agents.guardrails.get_classifier",
+        return_value=_make_grounding_classifier(is_grounded=True),
+    ):
+        client = TestClient(app)
+        resp = client.post(
+            "/check-grounding",
+            json={
+                "response": "Ο Κοσκωτάς ήταν τραπεζίτης.",
+                "context_chunks": ["Ο Κοσκωτάς ήταν τραπεζίτης."],
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "unverified_sentences" in data
+    assert isinstance(data["unverified_sentences"], list)
+
+
+def test_check_grounding_not_grounded_returns_unverified_sentences():
+    """/check-grounding returns specific unverified sentences when not grounded."""
+    from agents.guardrails import _NOT_GROUNDED_MSG
+
+    def _mock_detailed(response, context_chunks):
+        return False, _NOT_GROUNDED_MSG, ["The fabricated claim here."]
+
+    with patch(
+        "agents.guardrails_server.check_grounding_detailed", side_effect=_mock_detailed
+    ):
+        client = TestClient(app)
+        resp = client.post(
+            "/check-grounding",
+            json={
+                "response": "Real sentence. The fabricated claim here.",
+                "context_chunks": ["Some context."],
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["grounded"] is False
+    assert data["unverified_sentences"] == ["The fabricated claim here."]

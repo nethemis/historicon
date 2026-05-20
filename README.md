@@ -20,10 +20,10 @@ Patreon RSS → Audio Files → Deepgram → Greek Transcripts → Vector DB →
 
 ### System Components
 - **MCP Server** (`agents/mcp_server.py`) — FastMCP server on `:8001`, exposes 4 retrieval tools. No guardrails.
-- **Guardrails Server** (`agents/guardrails_server.py`) — Standalone HTTP server on `:8002`, exposes `POST /check-topic` for the OpenWebUI filter
-- **OpenWebUI** — Docker-based chat UI on `:3000`, connects to Ollama model and MCP server
+- **Guardrails Server** (`agents/guardrails_server.py`) — Standalone HTTP server on `:8002`. `POST /check-topic` blocks off-topic queries before the LLM call; `POST /check-grounding` checks each sentence of the LLM response against the retrieved chunks (per-chunk max-score NLI, `pysbd` sentence splitting, markdown headers excluded).
+- **OpenWebUI** — Docker-based chat UI on `:3000`, connects to Ollama and/or Claude (via Anthropic's OpenAI-compatible endpoint) and the MCP server
 - **Retrieval** (`agents/retrieval.py`) — ChromaDB semantic search + CrossEncoder reranking
-- **Guardrails** (`agents/guardrails.py`) — On-topic BART classifier; used by the guardrails server and evals
+- **Guardrails** (`agents/guardrails.py`) — NLI classifier for on-topic filtering and per-sentence grounding checks
 
 ### MCP Tools
 | Tool | Description |
@@ -87,29 +87,36 @@ This will:
 
 ### Step 4: Start the Servers
 
+Three processes must run simultaneously — open three separate terminal windows.
+
+**Terminal 1 — MCP retrieval server** (port 8001):
 ```bash
-# Start the FastMCP retrieval server (http://localhost:8001/mcp)
 uv run python agents/mcp_server.py
-
-# In a second terminal: start the guardrails server (http://localhost:8002/check-topic)
-uv run python agents/guardrails_server.py
 ```
-
-The MCP server exposes 4 retrieval tools at `http://localhost:8001/mcp`.
-The guardrails server classifies user messages for the OpenWebUI filter at `http://localhost:8002/check-topic`.
+Exposes 4 retrieval tools at `http://localhost:8001/mcp`. Keep this running.
 
 ---
 
-### Step 5: Start OpenWebUI
-
+**Terminal 2 — Guardrails server** (port 8002):
 ```bash
-# Start OpenWebUI in Docker (runs on http://localhost:3000)
+uv run python agents/guardrails_server.py
+```
+Classifies user messages (`POST /check-topic`) and validates LLM responses (`POST /check-grounding`) for the OpenWebUI filter. Keep this running.
+
+> **Note:** The first request loads the NLI model (~280 MB, `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`) into memory. Subsequent requests are fast.
+
+---
+
+**Terminal 3 — OpenWebUI** (port 3000):
+```bash
 docker compose up -d
 ```
 
 OpenWebUI is pre-configured via `docker-compose.yml` to:
 - Connect to Ollama on the host machine (`http://host.docker.internal:11434`)
+- Connect to Claude models via Anthropic's OpenAI-compatible endpoint (`https://api.anthropic.com/v1`) — requires `ANTHROPIC_API_KEY` in the shell environment
 - Connect to the HistoriCon MCP server (`http://host.docker.internal:8001/mcp`)
+- Connect to the guardrails server for the filter (`http://host.docker.internal:8002`)
 
 **First launch only:** The first account created becomes the admin.
 
@@ -121,7 +128,7 @@ Set the system prompt in OpenWebUI (Admin → Settings → System Prompt) using 
 
 ---
 
-### Step 6: (Optional) Set Up Podcast Pipeline
+### Step 5: (Optional) Set Up Podcast Pipeline
 
 If you want to download and transcribe new podcast episodes:
 
@@ -156,6 +163,9 @@ uv run python scripts/create_embeddings.py
 
 Both are read from the host shell environment by `docker-compose.yml` — they are **not hardcoded** in the file. Run `secrets && docker compose up -d` to ensure they are available.
 
+**For Claude models (OpenWebUI):**
+- `ANTHROPIC_API_KEY` - Enables Claude models in OpenWebUI via Anthropic's OpenAI-compatible endpoint. Run `secrets && docker compose up -d` to pass it through.
+
 **For Podcast Pipeline:**
 - `DEEPGRAM_API_KEY` - For Greek transcription (see Quick Start Step 6)
 - `PATREON_RSS_TOKEN` - For downloading new episodes from Patreon RSS
@@ -165,7 +175,9 @@ Both are read from the host shell environment by `docker-compose.yml` — they a
 - `LOGFIRE_SERVICE_NAME` - Service name in logs (default: "historicon-rag-agent")
 - `ENVIRONMENT` - Environment name (default: "development")
 
-**No LLM API key required** — the MCP server does not call any LLM. The model used for synthesis lives in OpenWebUI (Ollama or any OpenAI-compatible endpoint).
+**No LLM API key required for Ollama** — the MCP server does not call any LLM. The model used for synthesis lives in OpenWebUI (Ollama or any OpenAI-compatible endpoint).
+
+**For Claude models:** set `ANTHROPIC_API_KEY` in the shell environment before `docker compose up` — it is passed to OpenWebUI via `OPENAI_API_KEYS=${ANTHROPIC_API_KEY}` in `docker-compose.yml`.
 
 ## ⚙️ Configuration
 

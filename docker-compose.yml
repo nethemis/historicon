@@ -9,6 +9,9 @@ services:
     environment:
       # Ollama: point to the host machine (Docker can't use localhost for host services)
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      # Anthropic via OpenAI-compatible endpoint
+      - OPENAI_API_BASE_URLS=https://api.anthropic.com/v1
+      - OPENAI_API_KEYS=${ANTHROPIC_API_KEY}
       # Pre-configure the HistoriCon MCP server so it appears automatically on first launch
       # type=mcp, url points to the MCP server running on the host, config.enable=true
       - TOOL_SERVER_CONNECTIONS=[{"type":"mcp","url":"http://host.docker.internal:8001/mcp","auth_type":"none","info":{"id":"historicon","name":"HistoriCon"},"config":{"enable":true,"access_grants":[{"principal_type":"user","principal_id":"*","permission":"read"}]}}]

@@ -22,6 +22,7 @@ dependencies = [
     "silero-vad>=6.2.0",
     "torchcodec>=0.10.0",
     "transformers>=5.2.0",
+    "pysbd>=0.3.4",
     "librosa>=0.11.0",
     "fastapi>=0.136.1",
     "httpx[asyncio]>=0.28.1",
