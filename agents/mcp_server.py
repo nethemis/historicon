@@ -70,9 +70,12 @@ async def search_documents(query: str, max_results: int = 5) -> dict:
 @mcp.tool(
     description=(
         "Retrieve a specific time range from a HistoriCon episode transcript. "
-        "Use this after search_documents to get context around a returned timestamp. "
-        "IMPORTANT: Use the EXACT episode filename returned by search_documents "
-        "(full Greek title, .txt extension)."
+        "Call this proactively whenever you need broader context: on follow-up questions, "
+        "when search chunks are short or incomplete, when building a narrative answer, "
+        "or when the user asks for more detail. "
+        "Use the EXACT episode filename from search_documents results (full Greek title, .txt extension) "
+        "and the timestamp returned by search_documents. "
+        "Expand the window ±5 minutes around the timestamp for richer context."
     )
 )
 def get_transcript_section(episode_name: str, start_time: str, end_time: str) -> str:

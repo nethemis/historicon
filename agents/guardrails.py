@@ -49,6 +49,21 @@ _OFF_TOPIC_MSG = (
     "Please ask about Greek or Cypriot history, the podcast episodes, or its speakers."
 )
 
+# ─── Podcast-content keyword pre-check ───────────────────────────────────────
+
+# If the query contains any of these terms it explicitly references the podcast
+# or its episodes and is always on-topic — NLI is skipped entirely.
+# The list is intentionally short to avoid false positives.
+_PODCAST_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "επεισόδιο",  # Greek: episode (singular)
+        "επεισόδια",  # Greek: episodes (plural)
+        "podcast",
+        "historicon",
+        "episode",
+    }
+)
+
 # ─── Grounding check constants (output validation) ──────────────────────────
 
 # Direct NLI approach: context is the premise, each sentence/response is the
@@ -85,6 +100,17 @@ _NOT_GROUNDED_MSG = (
 )
 
 
+def _contains_podcast_keyword(query: str) -> bool:
+    """Return True if *query* explicitly references the podcast or its episodes.
+
+    Case-insensitive substring match against _PODCAST_KEYWORDS. A match means
+    the query is asking about podcast content and should always be allowed
+    through — NLI classification is skipped.
+    """
+    q_lower = query.lower()
+    return any(kw in q_lower for kw in _PODCAST_KEYWORDS)
+
+
 def _load_classifier():
     """Load the zero-shot classification pipeline (~280 MB, called once)."""
     from transformers import pipeline  # type: ignore[import]
@@ -117,6 +143,15 @@ def check_on_topic(query: str, classifier=None) -> tuple[bool, str]:
     """
     if classifier is None:
         classifier = get_classifier()
+
+    # Pre-check: queries explicitly referencing the podcast or its episodes are
+    # always on-topic — skip NLI to avoid false negatives from the model.
+    if _contains_podcast_keyword(query):
+        logfire.info(
+            "On-topic pre-check: podcast keyword matched",
+            query_preview=query[:60],
+        )
+        return True, ""
 
     try:
         result = classifier(

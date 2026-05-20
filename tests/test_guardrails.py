@@ -201,6 +201,34 @@ def test_check_on_topic_podcast_question_greek_passes():
     assert msg == ""
 
 
+def test_check_on_topic_episode_keyword_greek_short_circuits():
+    """Query with 'επεισόδιο' bypasses NLI entirely — classifier must not be called."""
+    from agents.guardrails import check_on_topic
+
+    mock_clf = MagicMock()
+    is_ok, msg = check_on_topic(
+        "Τι άλλο λέει το επεισόδιο για τη βρετανική κατοχή στην Κύπρο;",
+        classifier=mock_clf,
+    )
+    assert is_ok is True
+    assert msg == ""
+    mock_clf.assert_not_called()
+
+
+def test_check_on_topic_episode_keyword_english_short_circuits():
+    """Query with 'episode' bypasses NLI entirely — classifier must not be called."""
+    from agents.guardrails import check_on_topic
+
+    mock_clf = MagicMock()
+    is_ok, msg = check_on_topic(
+        "What else does the episode say about the British occupation in Cyprus?",
+        classifier=mock_clf,
+    )
+    assert is_ok is True
+    assert msg == ""
+    mock_clf.assert_not_called()
+
+
 # ─── Grounding check ──────────────────────────────────────────────────────────
 
 
