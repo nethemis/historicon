@@ -55,7 +55,7 @@ async def test_search_documents_returns_chunks():
     assert result["total_results"] == 3
     assert len(result["chunks"]) == 3
     assert result["query"] == "test query"
-    assert "error" not in result
+    assert result.get("error") is None
 
 
 @pytest.mark.asyncio

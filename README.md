@@ -128,6 +128,25 @@ Set the system prompt in OpenWebUI (Admin → Settings → System Prompt) using 
 
 ---
 
+**Terminal 4 (optional) — Jaeger tracing UI** (port 16686):
+```bash
+docker compose up -d jaeger
+```
+
+All three servers send OpenTelemetry traces to Jaeger automatically. Open **http://localhost:16686**, select service `historicon-rag-agent`, and click **Find Traces** to see span hierarchies with query text, scores, and result previews.
+
+Key env vars:
+
+| Variable | Default | Description |
+|---|---|---|
+| `OTEL_AUTO_CONFIGURE` | `true` | Set to `false` to disable (auto-off in tests) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` | Jaeger OTLP endpoint |
+| `ENVIRONMENT` | `development` | `production` disables the console exporter |
+
+See [TELEMETRY.md](TELEMETRY.md) for full details.
+
+---
+
 ### Step 5: (Optional) Set Up Podcast Pipeline
 
 If you want to download and transcribe new podcast episodes:
@@ -171,9 +190,10 @@ Both are read from the host shell environment by `docker-compose.yml` — they a
 - `PATREON_RSS_TOKEN` - For downloading new episodes from Patreon RSS
 
 **Optional (Observability):**
-- `LOGFIRE_TOKEN` - For tracking agent performance
-- `LOGFIRE_SERVICE_NAME` - Service name in logs (default: "historicon-rag-agent")
-- `ENVIRONMENT` - Environment name (default: "development")
+- `OTEL_AUTO_CONFIGURE` - Set to `false` to disable OpenTelemetry (default: `true`)
+- `OTEL_SERVICE_NAME` - Service name shown in Jaeger (default: `historicon-rag-agent`)
+- `OTEL_EXPORTER_OTLP_ENDPOINT` - OTLP endpoint for Jaeger (default: `http://localhost:4318`)
+- `ENVIRONMENT` - Environment name; `production` disables console span output (default: `development`)
 
 **No LLM API key required for Ollama** — the MCP server does not call any LLM. The model used for synthesis lives in OpenWebUI (Ollama or any OpenAI-compatible endpoint).
 
@@ -305,7 +325,7 @@ historicon/
 │   ├── models.py                    # Shared Pydantic types
 │   ├── guardrails.py                # On-topic BART classifier
 │   ├── guardrails_server.py         # Standalone guardrails HTTP server (port 8002)
-│   ├── logfire_setup.py             # Observability config
+│   ├── otel_setup.py                # OpenTelemetry config (OTLP → Jaeger)
 │   ├── mcp_server.py                # FastMCP server (4 tools, port 8001)
 │   ├── retrieval.py                 # Semantic search (ChromaDB + CrossEncoder)
 │   └── _utils.py                    # Shared helpers

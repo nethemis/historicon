@@ -29,22 +29,34 @@ Use --force to reindex all files, even if already indexed.
 """
 
 import argparse
+import hashlib
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+
+def _file_content_hash(file_path: Path) -> str:
+    """SHA-256 of file contents — used to detect real changes vs harmless touches."""
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 import chromadb
-import logfire
 import numpy as np
 from chromadb.config import Settings
+from opentelemetry import trace
 from sentence_transformers import SentenceTransformer
 
+from agents import otel_setup  # noqa: F401 — import-time OpenTelemetry bootstrap
 from agents.config import config, get_device
 
-# Suppress logfire warning
-os.environ.setdefault("LOGFIRE_IGNORE_NO_CONFIG", "1")
+# Get tracer for this module
+_tracer = otel_setup.get_tracer("historicon.create_embeddings")
 
 
 class DocumentIndexer:
@@ -52,51 +64,50 @@ class DocumentIndexer:
 
     def __init__(self):
         """Initialize the document indexer with embedding models and ChromaDB."""
-        print("\n🚀 Initializing DocumentIndexer...")
-        logfire.info("Initializing DocumentIndexer")
+        with _tracer.start_as_current_span("DocumentIndexer_init") as span:
+            print("\n🚀 Initializing DocumentIndexer...")
 
-        # Detect best device
-        self.device = get_device()
-        device_name = {
-            "mps": "Apple Metal (GPU)",
-            "cuda": "NVIDIA CUDA (GPU)",
-            "cpu": "CPU",
-        }.get(self.device, "CPU")
-        print(f"🔧 Using device: {device_name}")
-        if self.device == "mps":
-            print("   ⚡ M3 Max detected - expect 20-50x speedup!")
-        logfire.info(f"Using device: {self.device}")
+            # Detect best device
+            self.device = get_device()
+            device_name = {
+                "mps": "Apple Metal (GPU)",
+                "cuda": "NVIDIA CUDA (GPU)",
+                "cpu": "CPU",
+            }.get(self.device, "CPU")
+            print(f"🔧 Using device: {device_name}")
+            if self.device == "mps":
+                print("   ⚡ M3 Max detected - expect 20-50x speedup!")
+            span.set_attribute("device", str(self.device))
 
-        # Ensure directories exist
-        config.ensure_directories()
-        print(f"📁 Using ChromaDB directory: {config.chroma_db_dir}")
+            # Ensure directories exist
+            config.ensure_directories()
+            print(f"📁 Using ChromaDB directory: {config.chroma_db_dir}")
+            span.set_attribute("chroma_db_dir", str(config.chroma_db_dir))
 
-        # Initialize embedding model for creating embeddings
-        print(f"\n⏳ Loading embedding model: {config.embedding_model}")
-        print("   (Loading to GPU - may take 10-20 seconds...)")
-        self.embedding_model = SentenceTransformer(
-            config.embedding_model,
-            device=self.device,
-        )
-        print(f"✅ Loaded embedding model to {device_name}")
-        logfire.info(
-            f"Loaded embedding model: {config.embedding_model} on {self.device}"
-        )
+            # Initialize embedding model for creating embeddings
+            print(f"\n⏳ Loading embedding model: {config.embedding_model}")
+            print("   (Loading to GPU - may take 10-20 seconds...)")
+            self.embedding_model = SentenceTransformer(
+                config.embedding_model,
+                device=self.device,
+            )
+            print(f"✅ Loaded embedding model to {device_name}")
+            span.set_attribute("embedding_model", config.embedding_model)
 
-        # Initialize ChromaDB
-        print("\n⏳ Connecting to ChromaDB...")
-        self.chroma_client = chromadb.PersistentClient(
-            path=str(config.chroma_db_dir),
-            settings=Settings(anonymized_telemetry=False),
-        )
-        self.collection = self.chroma_client.get_or_create_collection(
-            name=config.documents_collection,
-            metadata={"hnsw:space": "cosine"},
-        )
-        print(f"✅ ChromaDB collection: {config.documents_collection}")
-        logfire.info(f"ChromaDB collection ready: {config.documents_collection}")
+            # Initialize ChromaDB
+            print("\n⏳ Connecting to ChromaDB...")
+            self.chroma_client = chromadb.PersistentClient(
+                path=str(config.chroma_db_dir),
+                settings=Settings(anonymized_telemetry=False),
+            )
+            self.collection = self.chroma_client.get_or_create_collection(
+                name=config.documents_collection,
+                metadata={"hnsw:space": "cosine"},
+            )
+            print(f"✅ ChromaDB collection: {config.documents_collection}")
+            span.set_attribute("collection_name", config.documents_collection)
 
-        print("✅ DocumentIndexer ready")
+            print("✅ DocumentIndexer ready")
 
     def parse_transcript(self, content: str) -> dict[str, Any]:
         """Parse transcript into full text and timestamped sections.
@@ -448,14 +459,15 @@ class DocumentIndexer:
                 embeddings.append(embedding)
 
         # Store in ChromaDB
-        self.collection.add(
-            ids=ids,
-            documents=documents,
-            metadatas=metadatas,
-            embeddings=embeddings,
-        )
-
-        logfire.info(f"Stored {len(chunks)} chunks in ChromaDB")
+        with _tracer.start_as_current_span("store_chunks") as span:
+            span.set_attribute("num_chunks", len(chunks))
+            self.collection.add(
+                ids=ids,
+                documents=documents,
+                metadatas=metadatas,
+                embeddings=embeddings,
+            )
+            print(f"✅ Stored {len(chunks)} chunks in ChromaDB")
 
     def index_file(self, file_path: Path) -> dict[str, Any]:
         """Index a single transcript file.
@@ -466,77 +478,92 @@ class DocumentIndexer:
         Returns:
             Dict with success status and chunks_created count
         """
-        try:
-            print(f"\n📄 Indexing: {file_path.name}")
-            logfire.info(f"Indexing {file_path.name}")
-
-            # Get file modification timestamp
-            file_mtime = file_path.stat().st_mtime
-
-            # Read transcript
-            print("   ⏳ Reading file...")
-            content = file_path.read_text(encoding="utf-8")
-            print(f"   ✅ Read {len(content):,} characters")
-
-            # Parse sections
-            print("   ⏳ Parsing transcript sections...")
-            sections = self.parse_transcript(content)
-            print(
-                f"   ✅ Found {len(sections['timestamped_chunks'])} timestamped sections"
-            )
-
-            all_chunks = []
-
-            # Create chunks from timestamped sections (preferred method)
-            # This approach respects speaker boundaries and groups semantically
-            if sections["timestamped_chunks"]:
-                chunks = self.create_semantic_chunks_from_speakers(
-                    timestamped_sections=sections["timestamped_chunks"],
-                    filename=file_path.name,  # Use full filename with .txt extension
-                )
-                all_chunks.extend(chunks)
-            # Fallback to simple chunking if no timestamped sections
-            elif sections["full_text"]:
-                print("   ⚠️  No speaker info found, using simple chunking...")
-                chunks = self.create_simple_chunks(
-                    text=sections["full_text"],
-                    filename=file_path.name,  # Use full filename with .txt extension
-                )
-                all_chunks.extend(chunks)
-
-            # Add indexed timestamp to all chunks
-            for chunk in all_chunks:
-                chunk["metadata"]["indexed_timestamp"] = file_mtime
-
-            # Delete old chunks if re-indexing
-            episode_name = file_path.stem
+        with _tracer.start_as_current_span("index_file") as span:
+            span.set_attribute("file_name", file_path.name)
             try:
-                # Get all existing chunks for this episode
-                existing = self.collection.get(
-                    where={"episode": episode_name},
+                print(f"\n📄 Indexing: {file_path.name}")
+
+                # Track both content hash (for robust skip-check) and mtime (informational)
+                file_mtime = file_path.stat().st_mtime
+                content_hash = _file_content_hash(file_path)
+                span.set_attribute("content_hash", content_hash)
+
+                # Read transcript
+                print("   ⏳ Reading file...")
+                content = file_path.read_text(encoding="utf-8")
+                print(f"   ✅ Read {len(content):,} characters")
+                span.set_attribute("file_size_chars", len(content))
+
+                # Parse sections
+                print("   ⏳ Parsing transcript sections...")
+                sections = self.parse_transcript(content)
+                print(
+                    f"   ✅ Found {len(sections['timestamped_chunks'])} timestamped sections"
                 )
-                if existing and existing["ids"]:
-                    print(f"   🗑️  Deleting {len(existing['ids'])} old chunks...")
-                    self.collection.delete(ids=existing["ids"])
+                span.set_attribute(
+                    "timestamped_sections_count", len(sections["timestamped_chunks"])
+                )
+
+                all_chunks = []
+
+                # Create chunks from timestamped sections (preferred method)
+                # This approach respects speaker boundaries and groups semantically
+                if sections["timestamped_chunks"]:
+                    chunks = self.create_semantic_chunks_from_speakers(
+                        timestamped_sections=sections["timestamped_chunks"],
+                        filename=file_path.name,  # Use full filename with .txt extension
+                    )
+                    all_chunks.extend(chunks)
+                # Fallback to simple chunking if no timestamped sections
+                elif sections["full_text"]:
+                    print("   ⚠️  No speaker info found, using simple chunking...")
+                    chunks = self.create_simple_chunks(
+                        text=sections["full_text"],
+                        filename=file_path.name,  # Use full filename with .txt extension
+                    )
+                    all_chunks.extend(chunks)
+
+                # Add indexed timestamp to all chunks
+                for chunk in all_chunks:
+                    chunk["metadata"]["indexed_timestamp"] = file_mtime
+
+                # Delete old chunks if re-indexing
+                episode_name = (
+                    file_path.name
+                )  # match the value stored in metadata.episode
+                try:
+                    # Get all existing chunks for this episode
+                    existing = self.collection.get(
+                        where={"episode": episode_name},
+                    )
+                    if existing and existing["ids"]:
+                        print(f"   🗑️  Deleting {len(existing['ids'])} old chunks...")
+                        self.collection.delete(ids=existing["ids"])
+                        span.set_attribute("deleted_chunks", len(existing["ids"]))
+                except Exception as e:
+                    print(
+                        f"   ℹ️  No existing chunks to delete for {episode_name}: {e}"
+                    )
+
+                # Store chunks
+                if all_chunks:
+                    print(f"   ⏳ Storing {len(all_chunks)} chunks in ChromaDB...")
+                    self.store_chunks(all_chunks)
+                    print(f"   ✅ Stored successfully")
+                    span.set_attribute("stored_chunks", len(all_chunks))
+
+                print(
+                    f"✅ Successfully indexed {file_path.name}: {len(all_chunks)} chunks"
+                )
+                span.set_attribute("status", "success")
+
+                return {"success": True, "chunks_created": len(all_chunks)}
+
             except Exception as e:
-                logfire.debug(f"No existing chunks to delete for {episode_name}: {e}")
-
-            # Store chunks
-            if all_chunks:
-                print(f"   ⏳ Storing {len(all_chunks)} chunks in ChromaDB...")
-                self.store_chunks(all_chunks)
-                print(f"   ✅ Stored successfully")
-
-            print(f"✅ Successfully indexed {file_path.name}: {len(all_chunks)} chunks")
-            logfire.info(
-                f"✅ Successfully indexed {file_path.name}: {len(all_chunks)} chunks"
-            )
-
-            return {"success": True, "chunks_created": len(all_chunks)}
-
-        except Exception as e:
-            logfire.error(f"❌ Failed to index {file_path.name}: {e}")
-            return {"success": False, "chunks_created": 0, "error": str(e)}
+                span.record_exception(e)
+                span.set_attribute("status", "failed")
+                print(f"❌ Failed to index {file_path.name}: {e}")
+                return {"success": False, "chunks_created": 0, "error": str(e)}
 
     def get_existing_file_timestamp(self, episode_name: str) -> float | None:
         """Get the timestamp of when a file was last indexed.
@@ -558,7 +585,7 @@ class DocumentIndexer:
             if result and result["metadatas"]:
                 return result["metadatas"][0].get("indexed_timestamp")
         except Exception as e:
-            logfire.debug(f"Error checking timestamp for {episode_name}: {e}")
+            print(f"Error checking timestamp for {episode_name}: {e}")
 
         return None
 
@@ -588,9 +615,7 @@ class DocumentIndexer:
         file_mtime = file_path.stat().st_mtime
 
         if file_mtime > indexed_timestamp:
-            logfire.info(
-                f"File {episode_name} modified since last index, will re-index"
-            )
+            print(f"File {episode_name} modified since last index, will re-index")
             return False
 
         # File exists in DB and hasn't been modified
@@ -609,107 +634,112 @@ def index_all_transcripts(
     Returns:
         Dictionary with indexing statistics
     """
-    if workers is None:
-        workers = config.indexing_workers
+    with _tracer.start_as_current_span("index_all_transcripts") as span:
+        if workers is None:
+            workers = config.indexing_workers
+        span.set_attribute("workers", workers)
+        span.set_attribute("force", force)
 
-    transcripts_dir = Path(config.transcripts_dir)
+        transcripts_dir = Path(config.transcripts_dir)
 
-    if not transcripts_dir.exists():
-        print(f"❌ Transcripts directory not found: {transcripts_dir}")
-        logfire.error(f"Transcripts directory not found: {transcripts_dir}")
-        return {"total_files": 0, "successful": 0, "failed": 0}
+        if not transcripts_dir.exists():
+            print(f"❌ Transcripts directory not found: {transcripts_dir}")
+            span.set_attribute("error", "directory_not_found")
+            return {"total_files": 0, "successful": 0, "failed": 0}
 
-    # Get all transcript files
-    print(f"\n📂 Scanning transcripts directory: {transcripts_dir}")
-    transcript_files = list(transcripts_dir.glob("*.txt"))
+        # Get all transcript files
+        print(f"\n📂 Scanning transcripts directory: {transcripts_dir}")
+        transcript_files = list(transcripts_dir.glob("*.txt"))
 
-    if not transcript_files:
-        print("⚠️  No transcript files found")
-        logfire.warn("No transcript files found")
-        return {"total_files": 0, "successful": 0, "failed": 0}
+        if not transcript_files:
+            print("⚠️  No transcript files found")
+            span.set_attribute("warning", "no_files_found")
+            return {"total_files": 0, "successful": 0, "failed": 0}
 
-    print(f"📊 Found {len(transcript_files)} transcript files")
-    logfire.info(f"Found {len(transcript_files)} transcript files")
+        print(f"📊 Found {len(transcript_files)} transcript files")
+        span.set_attribute("total_files", len(transcript_files))
 
-    print("\n" + "=" * 60)
-    print("INITIALIZING MODELS (This is the slow part!)")
-    print("=" * 60)
-    indexer = DocumentIndexer()
-    print("\n" + "=" * 60)
-    print("STARTING INDEXING")
-    print("=" * 60)
+        print("\n" + "=" * 60)
+        print("INITIALIZING MODELS (This is the slow part!)")
+        print("=" * 60)
+        indexer = DocumentIndexer()
+        print("\n" + "=" * 60)
+        print("STARTING INDEXING")
+        print("=" * 60)
 
-    # Filter files to index
-    files_to_index = [
-        f for f in transcript_files if not indexer.should_skip_file(f, force=force)
-    ]
+        # Filter files to index
+        files_to_index = [
+            f for f in transcript_files if not indexer.should_skip_file(f, force=force)
+        ]
 
-    if not files_to_index:
-        print("\n✅ All files already indexed. Use --force to reindex.")
-        logfire.info("All files already indexed. Use --force to reindex.")
-        return {
-            "total_files": len(transcript_files),
-            "successful": 0,  # No files were indexed
-            "failed": 0,
-            "skipped": len(transcript_files),
-        }
+        if not files_to_index:
+            print("\n✅ All files already indexed. Use --force to reindex.")
+            return {
+                "total_files": len(transcript_files),
+                "successful": 0,  # No files were indexed
+                "failed": 0,
+                "skipped": len(transcript_files),
+            }
 
-    print(
-        f"\n📋 Files to index: {len(files_to_index)} (skipping {len(transcript_files) - len(files_to_index)} already indexed)"
-    )
-    if force:
-        print("⚠️  Force mode: reindexing all files")
-    print(f"⚙️  Using {workers} parallel workers\n")
-    logfire.info(f"Indexing {len(files_to_index)} files with {workers} workers")
+        print(
+            f"\n📋 Files to index: {len(files_to_index)} (skipping {len(transcript_files) - len(files_to_index)} already indexed)"
+        )
+        if force:
+            print("⚠️  Force mode: reindexing all files")
+        print(f"⚙️  Using {workers} parallel workers\n")
+        span.set_attribute("files_to_index", len(files_to_index))
 
-    successful = 0
-    failed = 0
-    failed_files = []
-    completed = 0
-    total = len(files_to_index)
+        successful = 0
+        failed = 0
+        failed_files = []
+        completed = 0
+        total = len(files_to_index)
 
-    # Index files in parallel
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        future_to_file = {
-            executor.submit(indexer.index_file, file_path): file_path
-            for file_path in files_to_index
-        }
+        # Index files in parallel
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_file = {
+                executor.submit(indexer.index_file, file_path): file_path
+                for file_path in files_to_index
+            }
 
-        for future in as_completed(future_to_file):
-            file_path = future_to_file[future]
-            completed += 1
-            try:
-                result = future.result()
-                if result["success"]:
-                    successful += 1
-                    print(f"\n[{completed}/{total}] ✅ Success: {file_path.name}")
-                else:
+            for future in as_completed(future_to_file):
+                file_path = future_to_file[future]
+                completed += 1
+                try:
+                    result = future.result()
+                    if result["success"]:
+                        successful += 1
+                        print(f"\n[{completed}/{total}] ✅ Success: {file_path.name}")
+                    else:
+                        failed += 1
+                        failed_files.append(file_path.name)
+                        print(f"\n[{completed}/{total}] ❌ Failed: {file_path.name}")
+                except Exception as e:
+                    print(
+                        f"\n[{completed}/{total}] ❌ Exception: {file_path.name} - {e}"
+                    )
                     failed += 1
                     failed_files.append(file_path.name)
-                    print(f"\n[{completed}/{total}] ❌ Failed: {file_path.name}")
-            except Exception as e:
-                print(f"\n[{completed}/{total}] ❌ Exception: {file_path.name} - {e}")
-                logfire.error(f"Exception processing {file_path.name}: {e}")
-                failed += 1
-                failed_files.append(file_path.name)
 
-    print("\n" + "=" * 60)
-    print("INDEXING COMPLETE")
-    print("=" * 60)
+        print("\n" + "=" * 60)
+        print("INDEXING COMPLETE")
+        print("=" * 60)
 
-    results = {
-        "total_files": len(transcript_files),
-        "successful": successful,
-        "failed": failed,
-        "skipped": len(transcript_files) - len(files_to_index),
-    }
+        results = {
+            "total_files": len(transcript_files),
+            "successful": successful,
+            "failed": failed,
+            "skipped": len(transcript_files) - len(files_to_index),
+        }
 
-    if failed_files:
-        results["failed_files"] = failed_files
+        if failed_files:
+            results["failed_files"] = failed_files
 
-    logfire.info(f"Indexing complete: {successful} successful, {failed} failed")
+        span.set_attribute("successful", successful)
+        span.set_attribute("failed", failed)
+        print(f"Indexing complete: {successful} successful, {failed} failed")
 
-    return results
+        return results
 
 
 def main():
@@ -739,7 +769,7 @@ def main():
         print("⚠️  Force mode: ON")
     print("=" * 60)
 
-    logfire.info("Starting transcript indexing")
+    print("Starting transcript indexing")
     results = index_all_transcripts(force=args.force, workers=args.workers)
 
     print(f"\n{'=' * 60}")

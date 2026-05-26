@@ -18,8 +18,13 @@ In tests, pass a mock classifier to avoid triggering the real model load:
 from functools import lru_cache
 import re
 
-import logfire
+from opentelemetry import trace
 import pysbd
+
+from agents import otel_setup
+
+# Get tracer for this module
+_tracer = otel_setup.get_tracer("historicon.guardrails")
 
 # ─── Candidate labels for zero-shot classification ────────────────────────────
 
@@ -115,14 +120,17 @@ def _load_classifier():
     """Load the zero-shot classification pipeline (~280 MB, called once)."""
     from transformers import pipeline  # type: ignore[import]
 
-    logfire.info(
-        "Loading zero-shot classification model "
-        "(MoritzLaurer/mDeBERTa-v3-base-mnli-xnli)"
-    )
-    return pipeline(
-        "zero-shot-classification",
-        model="MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
-    )
+    with _tracer.start_as_current_span("load_classifier") as span:
+        print(
+            "Loading zero-shot classification model (MoritzLaurer/mDeBERTa-v3-base-mnli-xnli)"
+        )
+        classifier = pipeline(
+            "zero-shot-classification",
+            model="MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
+        )
+        span.set_attribute("model", "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli")
+        span.set_attribute("status", "loaded")
+        return classifier
 
 
 @lru_cache(maxsize=1)
@@ -141,49 +149,48 @@ def check_on_topic(query: str, classifier=None) -> tuple[bool, str]:
     its score meets _OFF_TOPIC_MIN_SCORE. Anything ambiguous passes through
     (fail-open) to avoid blocking legitimate on-topic questions.
     """
-    if classifier is None:
-        classifier = get_classifier()
+    with _tracer.start_as_current_span("check_on_topic") as span:
+        span.set_attribute("query_preview", query[:60])
 
-    # Pre-check: queries explicitly referencing the podcast or its episodes are
-    # always on-topic — skip NLI to avoid false negatives from the model.
-    if _contains_podcast_keyword(query):
-        logfire.info(
-            "On-topic pre-check: podcast keyword matched",
-            query_preview=query[:60],
-        )
-        return True, ""
+        if classifier is None:
+            classifier = get_classifier()
 
-    try:
-        result = classifier(
-            query,
-            _CANDIDATE_LABELS,
-            hypothesis_template=_ON_TOPIC_HYPOTHESIS_TEMPLATE,
-            multi_label=False,
-        )
+        # Pre-check: queries explicitly referencing the podcast or its episodes are
+        # always on-topic — skip NLI to avoid false negatives from the model.
+        if _contains_podcast_keyword(query):
+            span.set_attribute("result", "on_topic_keyword_match")
+            return True, ""
 
-        # Build a score lookup by label name
-        scores_by_label: dict[str, float] = dict(
-            zip(result["labels"], result["scores"])
-        )
-        on_topic_score = scores_by_label.get(_ON_TOPIC_LABEL, 0.0)
-        off_topic_score = scores_by_label.get(_OFF_TOPIC_LABEL, 0.0)
+        try:
+            result = classifier(
+                query,
+                _CANDIDATE_LABELS,
+                hypothesis_template=_ON_TOPIC_HYPOTHESIS_TEMPLATE,
+                multi_label=False,
+            )
 
-        logfire.info(
-            "On-topic classification",
-            query_preview=query[:60],
-            on_topic_score=on_topic_score,
-            off_topic_score=off_topic_score,
-        )
+            # Build a score lookup by label name
+            scores_by_label: dict[str, float] = dict(
+                zip(result["labels"], result["scores"])
+            )
+            on_topic_score = scores_by_label.get(_ON_TOPIC_LABEL, 0.0)
+            off_topic_score = scores_by_label.get(_OFF_TOPIC_LABEL, 0.0)
 
-        # Block only when off-topic wins with sufficient confidence
-        if off_topic_score > on_topic_score and off_topic_score >= _OFF_TOPIC_MIN_SCORE:
-            return False, _OFF_TOPIC_MSG
+            span.set_attribute("on_topic_score", on_topic_score)
+            span.set_attribute("off_topic_score", off_topic_score)
 
-        return True, ""
+            # Block only when off-topic wins with sufficient confidence
+            if off_topic_score > on_topic_score and off_topic_score >= _OFF_TOPIC_MIN_SCORE:
+                span.set_attribute("result", "off_topic_blocked")
+                return False, _OFF_TOPIC_MSG
 
-    except Exception as exc:
-        logfire.error("On-topic classifier error", error=str(exc))
-        return True, ""  # fail open — don't block legitimate queries on errors
+            span.set_attribute("result", "on_topic_allowed")
+            return True, ""
+
+        except Exception as exc:
+            span.record_exception(exc)
+            span.set_attribute("result", "error_fail_open")
+            return True, ""  # fail open — don't block legitimate queries on errors
 
 
 def check_grounding(
@@ -204,51 +211,59 @@ def check_grounding(
     Fails open (returns True) on empty context, empty response, or any error.
     Pass a mock classifier= in tests to avoid loading the real model.
     """
-    if not context_chunks:
-        return True, ""  # no context to compare against — fail open
+    with _tracer.start_as_current_span("check_grounding") as span:
+        span.set_attribute("response_preview", response[:60])
+        span.set_attribute("num_context_chunks", len(context_chunks))
 
-    if not response.strip():
-        return True, ""  # no response to evaluate — fail open
+        if not context_chunks:
+            span.set_attribute("result", "no_context_fail_open")
+            return True, ""  # no context to compare against — fail open
 
-    if classifier is None:
-        classifier = get_classifier()
+        if not response.strip():
+            span.set_attribute("result", "empty_response_fail_open")
+            return True, ""  # no response to evaluate — fail open
 
-    try:
-        hypothesis = response.strip()
+        if classifier is None:
+            classifier = get_classifier()
 
-        # Check each context chunk independently and take the maximum entailment
-        # score. A sentence is grounded if ANY retrieved chunk entails it —
-        # this avoids penalising sentences whose evidence appears in a later
-        # chunk that would otherwise be truncated when all chunks are joined.
-        max_score = 0.0
-        for chunk in context_chunks:
-            context = chunk[:_MAX_CONTEXT_CHARS]
-            result = classifier(
-                context,
-                [hypothesis],
-                hypothesis_template="{}",
-                multi_label=True,
-            )
-            score: float = result["scores"][0]
-            if score > max_score:
-                max_score = score
-            if max_score >= _GROUNDING_ENTAILMENT_MIN:
-                break  # already grounded — skip remaining chunks
+        try:
+            hypothesis = response.strip()
 
-        logfire.info(
-            "Grounding check",
-            response_preview=response[:60],
-            entailment_score=max_score,
-        )
+            # Check each context chunk independently and take the maximum entailment
+            # score. A sentence is grounded if ANY retrieved chunk entails it —
+            # this avoids penalising sentences whose evidence appears in a later
+            # chunk that would otherwise be truncated when all chunks are joined.
+            max_score = 0.0
+            chunks_checked = 0
+            for chunk in context_chunks:
+                context = chunk[:_MAX_CONTEXT_CHARS]
+                result = classifier(
+                    context,
+                    [hypothesis],
+                    hypothesis_template="{}",
+                    multi_label=True,
+                )
+                score: float = result["scores"][0]
+                chunks_checked += 1
+                if score > max_score:
+                    max_score = score
+                if max_score >= _GROUNDING_ENTAILMENT_MIN:
+                    break  # already grounded — skip remaining chunks
 
-        if max_score < _GROUNDING_ENTAILMENT_MIN:
-            return False, _NOT_GROUNDED_MSG
+            span.set_attribute("entailment_score", max_score)
+            span.set_attribute("chunks_checked", chunks_checked)
 
-        return True, ""
+            if max_score < _GROUNDING_ENTAILMENT_MIN:
+                span.set_attribute("result", "not_grounded")
+                return False, _NOT_GROUNDED_MSG
 
-    except Exception as exc:
-        logfire.error("Grounding check error", error=str(exc))
-        return True, ""  # fail open
+            span.set_attribute("result", "grounded")
+            return True, ""
+
+        except Exception as exc:
+            span.record_exception(exc)
+            span.set_attribute("result", "error_fail_open")
+            return True, ""  # fail open
 
 
 def _detect_language(text: str) -> str:
@@ -300,36 +315,41 @@ def check_grounding_detailed(
     Caps at _MAX_SENTENCES_TO_CHECK to limit latency on long responses.
     Fails open on empty context, empty response, or any error.
     """
-    if not context_chunks:
+    with _tracer.start_as_current_span("check_grounding_detailed") as span:
+        span.set_attribute("response_preview", response[:60])
+        span.set_attribute("num_context_chunks", len(context_chunks))
+
+        if not context_chunks:
+            span.set_attribute("result", "no_context_fail_open")
+            return True, "", []
+
+        if not response.strip():
+            span.set_attribute("result", "empty_response_fail_open")
+            return True, "", []
+
+        if classifier is None:
+            classifier = get_classifier()
+
+        sentences = _split_sentences(response)[:_MAX_SENTENCES_TO_CHECK]
+
+        if not sentences:
+            # All sentences were too short — fall back to whole-response binary check
+            is_ok, msg = check_grounding(response, context_chunks, classifier)
+            span.set_attribute("result", "fallback_whole_response")
+            return is_ok, msg, []
+
+        unverified: list[str] = []
+        for sentence in sentences:
+            is_ok, _ = check_grounding(sentence, context_chunks, classifier)
+            if not is_ok:
+                unverified.append(sentence)
+
+        span.set_attribute("sentences_checked", len(sentences))
+        span.set_attribute("unverified_count", len(unverified))
+
+        if unverified:
+            span.set_attribute("result", "unverified_sentences_found")
+            return False, _NOT_GROUNDED_MSG, unverified
+
+        span.set_attribute("result", "all_sentences_grounded")
         return True, "", []
-
-    if not response.strip():
-        return True, "", []
-
-    if classifier is None:
-        classifier = get_classifier()
-
-    sentences = _split_sentences(response)[:_MAX_SENTENCES_TO_CHECK]
-
-    if not sentences:
-        # All sentences were too short — fall back to whole-response binary check
-        is_ok, msg = check_grounding(response, context_chunks, classifier)
-        return is_ok, msg, []
-
-    unverified: list[str] = []
-    for sentence in sentences:
-        is_ok, _ = check_grounding(sentence, context_chunks, classifier)
-        if not is_ok:
-            unverified.append(sentence)
-
-    logfire.info(
-        "Grounding detailed check",
-        response_preview=response[:60],
-        sentences_checked=len(sentences),
-        unverified_count=len(unverified),
-    )
-
-    if unverified:
-        return False, _NOT_GROUNDED_MSG, unverified
-
-    return True, "", []

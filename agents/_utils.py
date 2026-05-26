@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import logfire
-
 
 def load_instructions(agent_name: str) -> str:
     """Load an agent's system prompt from `instructions/{agent_name}.txt`.
@@ -15,5 +13,5 @@ def load_instructions(agent_name: str) -> str:
     )
     if instruction_file.exists():
         return instruction_file.read_text(encoding="utf-8")
-    logfire.warn(f"Instruction file not found: {instruction_file}")
+    print(f"Instruction file not found: {instruction_file}")
     return f"You are the {agent_name} agent for the HistoriCon Greek podcast."

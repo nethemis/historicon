@@ -1,4 +1,23 @@
 services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.58
+    container_name: historicon-jaeger
+    ports:
+      # Jaeger UI
+      - "16686:16686"
+      # OTLP HTTP (primary exporter target)
+      - "4318:4318"
+      # OTLP gRPC (alternative exporter)
+      - "4317:4317"
+    environment:
+      # Memory-based storage (ephemeral, lost on restart)
+      - COLLECTOR_OTLP_ENABLED=true
+      # Increase memory for larger trace storage
+      - MEMORY_MAX_TRACES=100000
+    restart: unless-stopped
+    networks:
+      - historicon-network
+
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: historicon-openwebui
@@ -45,8 +64,16 @@ services:
       # Allows the container to reach services running on the host machine
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+    depends_on:
+      - jaeger
+    networks:
+      - historicon-network
 
 volumes:
   open-webui:
     driver: local
+
+networks:
+  historicon-network:
+    driver: bridge
 

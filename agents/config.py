@@ -108,6 +108,14 @@ def load_config() -> Config:
     with open(config_path, "r", encoding="utf-8") as f:
         config_data = json.load(f)
 
+    # Resolve relative paths against the project root so the running cwd
+    # never silently points at a different (empty) chroma_db / transcripts dir.
+    project_root = config_path.parent
+    for key in ("chroma_db_dir", "transcripts_dir", "raw_transcripts_dir", "audio_input_dir"):
+        value = config_data.get(key)
+        if value and not Path(value).is_absolute():
+            config_data[key] = str((project_root / value).resolve())
+
     return Config(**config_data)
 
 

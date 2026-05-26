@@ -1,12 +1,15 @@
 """
 title: HistoriCon On-Topic Filter
 author: HistoriCon
-version: 1.7.0
+version: 1.8.0
 description: >
   Blocks off-topic questions before any LLM call (inlet hook) and validates
   that the model's response is grounded in retrieved MCP tool results (outlet
   hook). Calls the HistoriCon guardrails server's /check-topic and
   /check-grounding endpoints respectively.
+
+  Telemetry: Logs trace IDs from guardrails server responses for correlation
+  with OpenTelemetry traces in Jaeger.
 
 Upload via: OpenWebUI Admin → Functions → + (new function) → paste this file.
 Set the Valve URLs if your guardrails server runs on a different host/port.
@@ -128,6 +131,13 @@ class Filter:
         if not last_user_msg:
             return body
 
+        # Telemetry: log inlet execution
+        print(
+            f"[HistoriCon inlet] Checking on-topic: {last_user_msg[:60]}...",
+            file=sys.stderr,
+            flush=True,
+        )
+
         try:
             resp = requests.post(
                 self.valves.check_topic_url,
@@ -136,6 +146,14 @@ class Filter:
             )
             resp.raise_for_status()
             data = resp.json()
+
+            # Telemetry: extract trace ID if present (for Jaeger correlation)
+            trace_id = resp.headers.get("x-trace-id", "N/A")
+            print(
+                f"[HistoriCon inlet] Guardrails response: on_topic={data.get('on_topic')}, trace_id={trace_id}",
+                file=sys.stderr,
+                flush=True,
+            )
 
             if not data.get("on_topic", True):
                 refusal = data.get("message", _DEFAULT_REFUSAL)
@@ -155,8 +173,13 @@ class Filter:
                     # Fallback: event emitter unavailable
                     raise Exception(refusal)
 
-        except requests.RequestException:
+        except requests.RequestException as e:
             # MCP server unreachable — fail open so legitimate users are not blocked
+            print(
+                f"[HistoriCon inlet] Guardrails server unreachable (fail open): {e}",
+                file=sys.stderr,
+                flush=True,
+            )
             pass
 
         return body
@@ -291,12 +314,23 @@ class Filter:
 
         # No tool results → response cannot be grounded in podcast data → always flag
         if not context_chunks:
+            print(
+                f"[HistoriCon outlet] No context chunks found — appending disclaimer",
+                file=sys.stderr,
+                flush=True,
+            )
             body["messages"][last_assistant_idx]["content"] = (
                 last_assistant_content + "\n\n---\n" + _GROUNDING_DISCLAIMER
             )
             return body
 
         # Ask the guardrails server whether the response is grounded
+        print(
+            f"[HistoriCon outlet] Checking grounding ({len(context_chunks)} chunks)...",
+            file=sys.stderr,
+            flush=True,
+        )
+
         try:
             resp = requests.post(
                 self.valves.check_grounding_url,
@@ -308,6 +342,14 @@ class Filter:
             )
             resp.raise_for_status()
             data = resp.json()
+
+            # Telemetry: extract trace ID if present (for Jaeger correlation)
+            trace_id = resp.headers.get("x-trace-id", "N/A")
+            print(
+                f"[HistoriCon outlet] Guardrails response: grounded={data.get('grounded')}, unverified={len(data.get('unverified_sentences', []))}, trace_id={trace_id}",
+                file=sys.stderr,
+                flush=True,
+            )
 
             if not data.get("grounded", True):
                 unverified = data.get("unverified_sentences", [])
@@ -344,8 +386,13 @@ class Filter:
                         )
                     )
 
-        except requests.RequestException:
+        except requests.RequestException as e:
             # Guardrails server unreachable — fail open, leave response unchanged
+            print(
+                f"[HistoriCon outlet] Guardrails server unreachable (fail open): {e}",
+                file=sys.stderr,
+                flush=True,
+            )
             pass
 
         return body

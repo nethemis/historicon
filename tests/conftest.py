@@ -4,9 +4,12 @@ Provides mocking utilities for testing agents without making real API calls.
 """
 
 import os
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+# Disable OpenTelemetry auto-configuration for tests
+os.environ["OTEL_AUTO_CONFIGURE"] = "false"
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +27,13 @@ def mock_anthropic_api():
         os.environ.pop("ANTHROPIC_API_KEY", None)
     else:
         os.environ["ANTHROPIC_API_KEY"] = original_key
+
+
+@pytest.fixture(autouse=True)
+def mock_otel_setup():
+    """Mock OpenTelemetry setup to prevent tracer initialization during tests."""
+    with patch("agents.otel_setup._configured", True):
+        yield
 
 
 @pytest.fixture

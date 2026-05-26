@@ -26,6 +26,10 @@ class RetrievalResponse(BaseModel):
     summary: str = Field(description="Synthesized summary of the retrieved information")
     query: str = Field(description="Original query")
     total_results: int = Field(description="Total number of results found")
+    error: str | None = Field(
+        default=None,
+        description="Error message if the search failed; None on success (incl. zero genuine results)",
+    )
 
 
 class MemoryType(BaseModel):
